@@ -1,4 +1,5 @@
 import os
+import json
 import threading
 import asyncio
 from flask import Flask
@@ -10,6 +11,35 @@ from dotenv import load_dotenv
 # Load local environment variables
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
+
+# ==========================================
+# 0. PERSISTENT STORAGE FUNCTIONS (JSON)
+# ==========================================
+DATA_FILE = "settings.json"
+
+def load_data():
+    """Loads saved settings from the JSON file if it exists."""
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"⚠️ Error loading settings file: {e}")
+    return {"active_channels": {}, "merchant_roles": {}}
+
+def save_data(data):
+    """Saves current settings to the JSON file."""
+    try:
+        with open(DATA_FILE, "w") as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"⚠️ Error saving settings file: {e}")
+
+# Load stored data into memory at startup
+db = load_data()
+active_channels = db.get("active_channels", {})  # Format: {guild_id_str: channel_id}
+merchant_roles = db.get("merchant_roles", {})    # Format: {guild_id_str: {merchant_name: role_id}}
+
 
 # ==========================================
 # 1. FLASK WEB SERVER (Uptime Keep-Alive)
@@ -32,16 +62,10 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Database dictionaries stored in memory while running
-active_channels = {}  # Format: {guild_id: channel_id}
-merchant_roles = {}   # Format: {guild_id: {merchant_name: role_id}}
-
-
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
     
-    # Start background loops if not already running
     if not merchant_announcement_loop.is_running():
         merchant_announcement_loop.start()
 
@@ -55,22 +79,18 @@ async def on_ready():
 # ==========================================
 # 3. MERCHANT BACKGROUND TASK & TIMING
 # ==========================================
-@tasks.loop(minutes=30) # Adjust interval checks as needed for your timers
+@tasks.loop(minutes=30)
 async def merchant_announcement_loop():
-    # Loop through configured guilds and send merchant alerts
-    for guild_id, channel_id in active_channels.items():
-        guild = bot.get_guild(guild_id)
+    # Note: JSON keys become strings, so we convert guild.id to string for lookup
+    for guild_id_str, channel_id in active_channels.items():
+        guild = bot.get_guild(int(guild_id_str))
         if not guild:
             continue
         channel = guild.get_channel(channel_id)
         if not channel:
             continue
 
-        # Get role mappings for this specific guild
-        guild_roles = merchant_roles.get(guild_id, {})
-
-        # Example trigger for Honey & Dungeon Merchant
-        # (You can separate or customize intervals per merchant type as desired)
+        guild_roles = merchant_roles.get(guild_id_str, {})
         honey_role_id = guild_roles.get("Honey & Dungeon Merchant")
         honey_mention = f"<@&{honey_role_id}>" if honey_role_id else "@here"
 
@@ -85,7 +105,7 @@ async def merchant_announcement_loop():
         try:
             await channel.send(content=honey_mention, embed=embed)
         except Exception as e:
-            print(f"Failed to send merchant notification in guild {guild_id}: {e}")
+            print(f"Failed to send merchant notification in guild {guild_id_str}: {e}")
 
 @merchant_announcement_loop.before_loop
 async def before_merchant_loop():
@@ -96,27 +116,34 @@ async def before_merchant_loop():
 # 4. CUSTOM SLASH COMMANDS
 # ==========================================
 
-# 1. Activate Merchants in a specific channel
 @bot.tree.command(name="activate_merchants", description="Enable merchant notifications in a specific channel.")
 @app_commands.describe(channel="The channel where merchant alerts will be sent")
 @app_commands.default_permissions(manage_channels=True)
 async def activate_merchants(interaction: discord.Interaction, channel: discord.TextChannel):
-    active_channels[interaction.guild.id] = channel.id
+    guild_id = str(interaction.guild.id)
+    active_channels[guild_id] = channel.id
+    
+    # Save updates to disk
+    save_data({"active_channels": active_channels, "merchant_roles": merchant_roles})
+    
     await interaction.response.send_message(f"✅ Merchant notifications have been activated and set to {channel.mention}!", ephemeral=True)
 
 
-# 2. Deactivate Merchants
 @bot.tree.command(name="desactivate_merchants", description="Stop sending merchant notifications.")
 @app_commands.default_permissions(manage_channels=True)
 async def desactivate_merchants(interaction: discord.Interaction):
-    if interaction.guild.id in active_channels:
-        del active_channels[interaction.guild.id]
+    guild_id = str(interaction.guild.id)
+    if guild_id in active_channels:
+        del active_channels[guild_id]
+        
+        # Save updates to disk
+        save_data({"active_channels": active_channels, "merchant_roles": merchant_roles})
+        
         await interaction.response.send_message("🛑 Merchant notifications have been deactivated.", ephemeral=True)
     else:
         await interaction.response.send_message("⚠️ Merchant notifications are not currently active in this server.", ephemeral=True)
 
 
-# 3. Link Role to Merchant with Choices
 @bot.tree.command(name="link_role_to_merchant", description="Link a specific role to ping for a chosen merchant.")
 @app_commands.describe(
     merchant_name="Select the merchant type",
@@ -129,10 +156,15 @@ async def desactivate_merchants(interaction: discord.Interaction):
 ])
 @app_commands.default_permissions(manage_roles=True)
 async def link_role_to_merchant(interaction: discord.Interaction, merchant_name: str, role: discord.Role):
-    if interaction.guild.id not in merchant_roles:
-        merchant_roles[interaction.guild.id] = {}
+    guild_id = str(interaction.guild.id)
+    if guild_id not in merchant_roles:
+        merchant_roles[guild_id] = {}
     
-    merchant_roles[interaction.guild.id][merchant_name] = role.id
+    merchant_roles[guild_id][merchant_name] = role.id
+    
+    # Save updates to disk
+    save_data({"active_channels": active_channels, "merchant_roles": merchant_roles})
+    
     await interaction.response.send_message(f"🔗 Successfully linked **{merchant_name}** notifications to role {role.mention}!", ephemeral=True)
 
 
