@@ -314,8 +314,8 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
 
     # Restored organized layout with clean fields and proper spacing
     embed.add_field(
-        name=f"**🔥 Congrats! {flag} {display_name} hatched a {tier_prefix} {item_name}!{shiny_suffix}**", 
-        value="", 
+        name="", 
+        value=f"**🔥 Congrats! {flag} {display_name} hatched a {tier_prefix} {item_name}!{shiny_suffix}**", 
         inline=False
     )
     
@@ -517,60 +517,6 @@ async def test_merchant(interaction: discord.Interaction, merchant_name: str):
     await channel.send(content=role_mention, embed=embed)
     await interaction.response.send_message(f"✅ Test alert for **{merchant_name}** successfully sent to {channel.mention}!", ephemeral=True)
 
-
-@bot.tree.command(name="load_hatching_image", description="Test command: Pulls the latest global hatch and reports any image loading errors.")
-@app_commands.default_permissions(manage_channels=True)
-async def load_hatching_image(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/pet-hatches") as resp:
-                if resp.status != 200:
-                    await interaction.followup.send(f"❌ API Error: Status code `{resp.status}`", ephemeral=True)
-                    return
-                data = await resp.json()
-                hatches = data.get("petHatches", [])
-                
-                if not hatches:
-                    await interaction.followup.send("⚠️ API returned zero pet hatches.", ephemeral=True)
-                    return
-                
-                latest_hatch = hatches[0]
-                item_info = latest_hatch.get("item", {})
-                item_name = item_info.get("name", "Unknown")
-                tier = item_info.get("tier", 1)
-
-                pets_directory = await get_pets_directory(session)
-
-                pet_data = {}
-                if isinstance(pets_directory, dict):
-                    pet_data = pets_directory.get(item_name, {})
-                elif isinstance(pets_directory, list):
-                    for entry in pets_directory:
-                        if isinstance(entry, dict) and entry.get("name", "").lower() == item_name.lower():
-                            pet_data = entry
-                            break
-
-                images = pet_data.get("images", []) if isinstance(pet_data, dict) else []
-                img_index = tier - 1 if 0 <= (tier - 1) < len(images) else 0
-                raw_asset = images[img_index] if images and len(images) > img_index else None
-                asset_id = extract_asset_id(raw_asset) if raw_asset else None
-                resolved_url = await fetch_roblox_thumbnail(session, asset_id) if asset_id else None
-
-                if not resolved_url:
-                    await interaction.followup.send(
-                        f"⚠️ **Image Error/Missing:** Could not resolve thumbnail for pet `{item_name}` (Tier: {tier}).\n"
-                        f"Raw Directory Images Found: `{images}`", ephemeral=True
-                    )
-                    return
-
-                fake_username = "TestUser"
-                embed = await build_hatch_embed_from_data(session, latest_hatch, fake_username)
-                await interaction.followup.send(content=f"✅ Image loaded successfully! Resolved Thumbnail URL: `{resolved_url}`", embed=embed, ephemeral=False)
-
-        except Exception as e:
-            await interaction.followup.send(f"❌ Exception caught while loading image: ```python\n{str(e)}\n```", ephemeral=True)
 
 
 @bot.tree.command(name="bot_info", description="Displays bot configurations and linked accounts for this server.")
