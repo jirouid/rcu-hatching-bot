@@ -314,8 +314,8 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
 
     # Restored organized layout with clean fields and proper spacing
     embed.add_field(
-        name="", 
-        value=f"## 🔥 Congrats! {flag} {display_name} hatched a {tier_prefix} {item_name}!{shiny_suffix}", 
+        name=f"**🔥 Congrats! {flag} {display_name} hatched a {tier_prefix} {item_name}!{shiny_suffix}**", 
+        value="", 
         inline=False
     )
     
@@ -330,7 +330,7 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     )
     
     embed.add_field(
-        name="**📘 Player's Stats:**", 
+        name="\n **📘 Player's Stats:**", 
         value=(
             f"Total Eggs Opened: {formatted_eggs_opened}\n"
             f"Rarity: `{formatted_player_chance}`"
