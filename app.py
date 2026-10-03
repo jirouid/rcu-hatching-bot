@@ -1,7 +1,5 @@
 import os
-import json
 import threading
-import asyncio
 from flask import Flask
 import discord
 from discord import app_commands
@@ -9,42 +7,39 @@ from discord.ext import commands, tasks
 from datetime import datetime, timedelta
 import pytz
 import aiohttp
+from pymongo import MongoClient
 from dotenv import load_dotenv
 
 # Load local environment variables
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
+MONGO_URI = os.getenv("MONGO_URI")
 TUNISIA_TZ = pytz.timezone('Africa/Tunis')
 
 # ==========================================
-# 0. PERSISTENT STORAGE FUNCTIONS (JSON)
+# 0. MONGODB DATABASE SETUP
 # ==========================================
-DATA_FILE = "settings.json"
+if not MONGO_URI:
+    print("❌ Error: MONGO_URI environment variable is missing!")
 
-def load_data():
-    """Loads saved settings from the JSON file if it exists."""
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"⚠️ Error loading settings file: {e}")
-    return {"active_channels": {}, "hatching_channels": {}, "merchant_roles": {}, "linked_accounts": {}}
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client["discord_bot_db"]
 
-def save_data(data):
-    """Saves current settings to the JSON file."""
-    try:
-        with open(DATA_FILE, "w") as f:
-            json.dump(data, f, indent=4)
-    except Exception as e:
-        print(f"⚠️ Error saving settings file: {e}")
+# Collections
+settings_col = db["settings"]
+
+def load_setting(key, default):
+    doc = settings_col.find_one({"_id": key})
+    return doc["value"] if doc else default
+
+def save_setting(key, value):
+    settings_col.update_one({"_id": key}, {"$set": {"value": value}}, upsert=True)
 
 # Load stored data into memory at startup
-db = load_data()
-active_channels = db.get("active_channels", {})      # Format: {guild_id_str: channel_id}
-hatching_channels = db.get("hatching_channels", {})  # Format: {guild_id_str: channel_id}
-merchant_roles = db.get("merchant_roles", {})        # Format: {guild_id_str: {merchant_name: role_id}}
-linked_accounts = db.get("linked_accounts", {})      # Format: {discord_user_id_str: [{"username": str, "id": int}]}
+active_channels = load_setting("active_channels", {})      # Format: {guild_id_str: channel_id}
+hatching_channels = load_setting("hatching_channels", {})  # Format: {guild_id_str: channel_id}
+merchant_roles = load_setting("merchant_roles", {})        # Format: {guild_id_str: {merchant_name: role_id}}
+linked_accounts = load_setting("linked_accounts", {})      # Format: {discord_user_id_str: [{"username": str, "id": int}]}
 
 
 # ==========================================
@@ -54,7 +49,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "🤖 Discord Bot is active and running!"
+    return "🤖 Discord Bot is active and running with MongoDB!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -66,7 +61,7 @@ def run_flask():
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True  # <--- ADD THIS LINE
+intents.members = True  # Required for viewing server members properly
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
@@ -158,13 +153,7 @@ async def before_merchant_loop():
 async def activate_merchants(interaction: discord.Interaction, channel: discord.TextChannel):
     guild_id = str(interaction.guild.id)
     active_channels[guild_id] = channel.id
-    
-    save_data({
-        "active_channels": active_channels,
-        "hatching_channels": hatching_channels,
-        "merchant_roles": merchant_roles,
-        "linked_accounts": linked_accounts
-    })
+    save_setting("active_channels", active_channels)
     
     await interaction.response.send_message(f"✅ Merchant notifications have been activated and set to {channel.mention}!", ephemeral=True)
 
@@ -175,13 +164,7 @@ async def activate_merchants(interaction: discord.Interaction, channel: discord.
 async def activate_hatching(interaction: discord.Interaction, channel: discord.TextChannel):
     guild_id = str(interaction.guild.id)
     hatching_channels[guild_id] = channel.id
-    
-    save_data({
-        "active_channels": active_channels,
-        "hatching_channels": hatching_channels,
-        "merchant_roles": merchant_roles,
-        "linked_accounts": linked_accounts
-    })
+    save_setting("hatching_channels", hatching_channels)
     
     await interaction.response.send_message(f"✅ Hatching channel has been set to {channel.mention}!", ephemeral=True)
 
@@ -192,13 +175,7 @@ async def desactivate_merchants(interaction: discord.Interaction):
     guild_id = str(interaction.guild.id)
     if guild_id in active_channels:
         del active_channels[guild_id]
-        
-        save_data({
-            "active_channels": active_channels,
-            "hatching_channels": hatching_channels,
-            "merchant_roles": merchant_roles,
-            "linked_accounts": linked_accounts
-        })
+        save_setting("active_channels", active_channels)
         
         await interaction.response.send_message("🛑 Merchant notifications have been deactivated.", ephemeral=True)
     else:
@@ -222,13 +199,7 @@ async def link_role_to_merchant(interaction: discord.Interaction, merchant_name:
         merchant_roles[guild_id] = {}
     
     merchant_roles[guild_id][merchant_name] = role.id
-    
-    save_data({
-        "active_channels": active_channels,
-        "hatching_channels": hatching_channels,
-        "merchant_roles": merchant_roles,
-        "linked_accounts": linked_accounts
-    })
+    save_setting("merchant_roles", merchant_roles)
     
     await interaction.response.send_message(f"🔗 Successfully linked **{merchant_name}** notifications to role {role.mention}!", ephemeral=True)
 
@@ -359,12 +330,7 @@ async def connect(interaction: discord.Interaction, username: str):
         return
 
     linked_accounts[discord_user_id].append({"username": roblox_name, "id": roblox_id})
-    save_data({
-        "active_channels": active_channels,
-        "hatching_channels": hatching_channels,
-        "merchant_roles": merchant_roles,
-        "linked_accounts": linked_accounts
-    })
+    save_setting("linked_accounts", linked_accounts)
 
     await interaction.followup.send(f"✅ Successfully connected Roblox account **{roblox_name}** (`ID: {roblox_id}`) to your profile!", ephemeral=True)
 
@@ -378,7 +344,7 @@ async def disconnect(interaction: discord.Interaction, username: str):
     user_accounts = linked_accounts.get(discord_user_id, [])
 
     if not user_accounts:
-        await interaction.followup.send("⚠️ You don't have any Roblox accounts linked to your profile.", ephemeral=True)
+        await interaction.followup.send("⚠️️ You don't have any Roblox accounts linked to your profile.", ephemeral=True)
         return
 
     found_account = None
@@ -395,12 +361,7 @@ async def disconnect(interaction: discord.Interaction, username: str):
     if not user_accounts:
         del linked_accounts[discord_user_id]
 
-    save_data({
-        "active_channels": active_channels,
-        "hatching_channels": hatching_channels,
-        "merchant_roles": merchant_roles,
-        "linked_accounts": linked_accounts
-    })
+    save_setting("linked_accounts", linked_accounts)
 
     await interaction.followup.send(f"✅ Successfully disconnected **{found_account['username']}** (`ID: {found_account['id']}`) from your profile.", ephemeral=True)
 
