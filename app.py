@@ -224,7 +224,7 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     img_index = tier - 1 if 0 <= (tier - 1) < len(images) else 0
     if images:
         image_url = format_asset_url(images[img_index])
-
+        print(image_url)
     # Fetch Roblox user avatar for author icon image
     avatar_url = await fetch_roblox_avatar(session, user_id)
 
@@ -267,8 +267,8 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
 
     formatted_eggs_opened = f"{eggs_opened:,.0f}" if eggs_opened < 1000000 else f"{eggs_opened / 1000000:.2f}M" if eggs_opened < 1000000000 else f"{eggs_opened / 1000000000:.2f}B"
     
-    formatted_chance = f"1/{int(1/chance):,}" if chance > 0 else "N/A"
-    formatted_player_chance = f"1/{int(1/player_chance):,}" if player_chance > 0 else "N/A"
+    formatted_chance = f"1/{int(100/chance):,}" if chance > 0 else "N/A"
+    formatted_player_chance = f"1/{int(100/player_chance):,}" if player_chance > 0 else "N/A"
 
     embed = discord.Embed(color=embed_color, timestamp=datetime.now())
     embed.set_author(name=f"{clan_display}{display_name}", icon_url=avatar_url if avatar_url else discord.Embed.Empty)
@@ -279,7 +279,7 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     # Clean structured fields to guarantee uniform card width and spacing
     embed.add_field(
         name="", 
-        value=f"### 🔥 Congrats! {flag} {display_name} hatched a\n### {tier_prefix} {item_name}!", 
+        value=f" 🔥 Congrats! {flag} {display_name} hatched a\n {tier_prefix} {item_name}!", 
         inline=False
     )
     
