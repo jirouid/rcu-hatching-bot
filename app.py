@@ -224,14 +224,18 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     img_index = tier - 1 if 0 <= (tier - 1) < len(images) else 0
     if images:
         image_url = format_asset_url(images[img_index])
-        print(image_url)
+    
+    # [TESTING LOG] Check if image URL is correctly parsed
+    print(f"[IMAGE TEST] Pet: {item_name} | Tier: {tier} | Image URL: {image_url}")
+
     # Fetch Roblox user avatar for author icon image
     avatar_url = await fetch_roblox_avatar(session, user_id)
 
-    # Proper naming prefix
+    # Proper naming prefix with sparkling emoji for shiny pets
     prefix_parts = []
     if is_shiny:
-        prefix_parts.append("Shiny")
+        prefix_parts.append("🌟 Shiny")
+    
     if tier == 2:
         prefix_parts.append("Golden")
     elif tier == 3:
@@ -267,8 +271,9 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
 
     formatted_eggs_opened = f"{eggs_opened:,.0f}" if eggs_opened < 1000000 else f"{eggs_opened / 1000000:.2f}M" if eggs_opened < 1000000000 else f"{eggs_opened / 1000000000:.2f}B"
     
-    formatted_chance = f"1/{int(100/chance):,}" if chance > 0 else "N/A"
-    formatted_player_chance = f"1/{int(100/player_chance):,}" if player_chance > 0 else "N/A"
+    # Game uses 100 / chance formula
+    formatted_chance = f"1/{int(100 / chance):,}" if chance > 0 else "N/A"
+    formatted_player_chance = f"1/{int(100 / player_chance):,}" if player_chance > 0 else "N/A"
 
     embed = discord.Embed(color=embed_color, timestamp=datetime.now())
     embed.set_author(name=f"{clan_display}{display_name}", icon_url=avatar_url if avatar_url else discord.Embed.Empty)
@@ -276,28 +281,19 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     if image_url:
         embed.set_thumbnail(url=image_url)
 
-    # Clean structured fields to guarantee uniform card width and spacing
+    # Simplified, wider layout avoiding stretched vertical stacking
     embed.add_field(
-        name="", 
-        value=f" 🔥 Congrats! {flag} {display_name} hatched a\n {tier_prefix} {item_name}!", 
+        name="🎉 Hatch Successful!", 
+        value=f"🔥 {flag} **{display_name}** hatched a **{tier_prefix} {item_name}**!", 
         inline=False
     )
     
     embed.add_field(
-        name="", 
+        name="📊 Details", 
         value=(
-            f"🥚 **Egg:** {egg_name} (`{formatted_eggs_opened} opened`)\n"
-            f"🎲 **Rarity:** `{formatted_chance}`\n"
-            f"⭐ **Serial:** `#{serial}`"
-        ), 
-        inline=False
-    )
-    
-    embed.add_field(
-        name="📘 Player's Stats:", 
-        value=(
-            f"Total Eggs Opened: {formatted_eggs_opened}\n"
-            f"Rarity: `{formatted_player_chance}`"
+            f"🥚 **Egg:** {egg_name} (`{formatted_eggs_opened}`)\n"
+            f"🎲 **Rarity:** `{formatted_chance}` | ⭐ **Serial:** `#{serial}`\n"
+            f"📈 **Player Rarity:** `{formatted_player_chance}`"
         ), 
         inline=False
     )
@@ -659,7 +655,7 @@ if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.start()
 
-    case TOKEN:
+    if TOKEN:
         bot.run(TOKEN)
     else:
         print("❌ Error: DISCORD_TOKEN is missing!")
