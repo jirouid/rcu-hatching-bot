@@ -40,6 +40,7 @@ active_channels = load_setting("active_channels", {})      # Format: {guild_id_s
 hatching_channels = load_setting("hatching_channels", {})  # Format: {guild_id_str: channel_id}
 merchant_roles = load_setting("merchant_roles", {})        # Format: {guild_id_str: {merchant_name: role_id}}
 linked_accounts = load_setting("linked_accounts", {})      # Format: {discord_user_id_str: [{"username": str, "id": int}]}
+processed_hatches = load_setting("processed_hatches", [])  # List of recently announced hatch IDs (max 200 kept)
 
 
 # ==========================================
@@ -70,6 +71,8 @@ async def on_ready():
     
     if not merchant_announcement_loop.is_running():
         merchant_announcement_loop.start()
+    if not hatching_announcement_loop.is_running():
+        hatching_announcement_loop.start()
 
     try:
         synced = await bot.tree.sync()
@@ -79,7 +82,7 @@ async def on_ready():
 
 
 # ==========================================
-# 3. MERCHANT BACKGROUND TASK & TIMING
+# 3. BACKGROUND TASKS (Merchants & Hatches)
 # ==========================================
 @tasks.loop(minutes=1)
 async def merchant_announcement_loop():
@@ -140,6 +143,188 @@ async def merchant_announcement_loop():
 
 @merchant_announcement_loop.before_loop
 async def before_merchant_loop():
+    await bot.wait_until_ready()
+
+
+# Helper function to convert Roblox asset ID format to standard image URL
+def format_asset_url(asset_str):
+    if asset_str and asset_str.startswith("rbxassetid://"):
+        asset_id = asset_str.replace("rbxassetid://", "")
+        return f"https://assetdelivery.roblox.com/v1/asset?id={asset_id}"
+    return None
+
+# Mapping country code to emoji flag
+def country_to_flag(country_code):
+    if not country_code or len(country_code) != 2:
+        return ""
+    code = country_code.upper()
+    return chr(127397 + ord(code[0])) + chr(127397 + ord(code[1]))
+
+@tasks.loop(seconds=30)
+async def hatching_announcement_loop():
+    if not hatching_channels:
+        return
+
+    async with aiohttp.ClientSession() as session:
+        # 1. Fetch Pet Directory for Rarity and Images
+        pets_directory = {}
+        try:
+            async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/directories/pets") as resp:
+                if resp.status == 200:
+                    pets_directory = await resp.json()
+        except Exception as e:
+            print(f"Error fetching pet directory: {e}")
+            return
+
+        # 2. Fetch Recent Pet Hatches
+        try:
+            async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/pet-hatches") as resp:
+                if resp.status != 200:
+                    return
+                data = await resp.json()
+                hatches = data.get("petHatches", [])
+        except Exception as e:
+            print(f"Error fetching pet hatches: {e}")
+            return
+
+        global processed_hatches
+        new_hatches_found = False
+
+        # Process from oldest to newest
+        for hatch in reversed(hatches):
+            hatch_id = hatch.get("id")
+            if not hatch_id or hatch_id in processed_hatches:
+                continue
+
+            # Mark as processed immediately
+            processed_hatches.append(hatch_id)
+            new_hatches_found = True
+
+            # Ignore anonymous hatches
+            if hatch.get("anonymous", False):
+                continue
+
+            user_id = hatch.get("userId")
+            
+            # Check if this Roblox user ID is linked to ANY user in our bot
+            matched_discord_id = None
+            roblox_username = None
+            for d_id, accounts in linked_accounts.items():
+                for acc in accounts:
+                    if acc["id"] == user_id:
+                        matched_discord_id = d_id
+                        roblox_username = acc["username"]
+                        break
+                if matched_discord_id:
+                    break
+
+            # If the user hatching the pet is not linked in our bot, skip
+            if not matched_discord_id:
+                continue
+
+            # Extract Hatch Details
+            clan_tag = hatch.get("clanTag", "")
+            clan_display = f"[{clan_tag}] " if clan_tag else ""
+            country_code = hatch.get("countryCode", "")
+            flag = country_to_flag(country_code)
+            
+            egg_name = hatch.get("eggName", "Unknown")
+            eggs_opened = hatch.get("eggsOpened", 0)
+            player_chance = hatch.get("playerChance", 0)
+            serial = hatch.get("serial", 0)
+            
+            item_info = hatch.get("item", {})
+            item_name = item_info.get("name", "Unknown Pet")
+            tier = item_info.get("tier", 1) # 1: normal, 2: golden, 3: toxic, 4: galaxy
+            is_shiny = item_info.get("shiny", False)
+
+            # Lookup pet info in directory
+            pet_data = pets_directory.get(item_name, {})
+            rarity = pet_data.get("rarity", "secret").lower()
+            images = pet_data.get("images", [])
+
+            # Select correct image based on tier (index 0: normal, 1: golden, 2: toxic, 3: galaxy)
+            image_url = None
+            img_index = tier - 1 if 0 <= (tier - 1) < len(images) else 0
+            if images:
+                image_url = format_asset_url(images[img_index])
+
+            # Determine Tier Prefix Name & Color mapping
+            tier_prefix = "Normal"
+            if tier == 2:
+                tier_prefix = "Golden"
+            elif tier == 3:
+                tier_prefix = "Toxic"
+            elif tier == 4:
+                tier_prefix = "Galaxy"
+            if is_shiny and tier == 1:
+                tier_prefix = "Secret"
+
+            # Color logic based on rarity and variant
+            embed_color = discord.Color.red()
+            if tier == 2:
+                embed_color = discord.Color.from_str("#ffd024")
+            elif tier == 3:
+                embed_color = discord.Color.from_str("#57ed4c")
+            elif tier == 4:
+                embed_color = discord.Color.from_str("#b811ff")
+            else:
+                if rarity == "secret":
+                    embed_color = discord.Color.from_str("#fd4649")
+                elif rarity == "divine":
+                    embed_color = discord.Color.from_str("#ffee00")
+                elif rarity == "supreme":
+                    embed_color = discord.Color.from_str("#ff6600")
+                elif rarity == "mysterious":
+                    embed_color = discord.Color.from_str("#9400fd")
+                elif rarity == "ultimate":
+                    embed_color = discord.Color.from_str("#08ff00")
+
+            # Format numbers cleanly (e.g. 3.72M, 1.03B)
+            formatted_eggs_opened = f"{eggs_opened:,.0f}" if eggs_opened < 1000000 else f"{eggs_opened / 1000000:.2f}M" if eggs_opened < 1000000000 else f"{eggs_opened / 1000000000:.2f}B"
+            formatted_player_chance = f"1/{int(1/player_chance):,}" if player_chance > 0 else "N/A"
+
+            # Build Embed Matching Screenshot Layout
+            description_text = (
+                f"🔥 **Congrats! {flag}**\n"
+                f"**{roblox_username} hatched a**\n"
+                f"**{tier_prefix} {item_name}!**\n\n"
+                f"🥚 **Egg:** {egg_name} (`{formatted_eggs_opened} opened`)\n"
+                f"🎲 **Rarity:** `{formatted_player_chance}`\n"
+                f"⭐ **Serial:** `#{serial}`\n\n"
+                f"📘 **Player's Stats:**\n"
+                f"Total Eggs Opened: {formatted_eggs_opened}\n"
+                f"Rarity: {formatted_player_chance}"
+            )
+
+            embed = discord.Embed(description=description_text, color=embed_color)
+            embed.set_author(name=f"{clan_display}{roblox_username}", icon_url=image_url if image_url else discord.Embed.Empty)
+            if image_url:
+                embed.set_thumbnail(url=image_url)
+            embed.timestamp = datetime.now()
+
+            # Send to all configured hatching channels across servers
+            for guild_id_str, chan_id in hatching_channels.items():
+                guild = bot.get_guild(int(guild_id_str))
+                if not guild:
+                    continue
+                channel = guild.get_channel(chan_id)
+                if not channel:
+                    continue
+                
+                try:
+                    await channel.send(content=f"<@{matched_discord_id}>", embed=embed)
+                except Exception as e:
+                    print(f"Failed to send hatch notification in guild {guild_id_str}: {e}")
+
+        # Keep only the last 200 processed hatch IDs in memory & DB to prevent bloat
+        if new_hatches_found:
+            if len(processed_hatches) > 200:
+                processed_hatches = processed_hatches[-200:]
+            save_setting("processed_hatches", processed_hatches)
+
+@hatching_announcement_loop.before_loop
+async def before_hatching_loop():
     await bot.wait_until_ready()
 
 
@@ -217,7 +402,7 @@ async def test_merchant(interaction: discord.Interaction, merchant_name: str):
     channel_id = active_channels.get(guild_id_str)
     
     if not channel_id:
-        await interaction.response.send_message("⚠️️ No merchant channel is activated here! Use `/activate_merchants` first.", ephemeral=True)
+        await interaction.response.send_message("⚠ No merchant channel is activated here! Use `/activate_merchants` first.", ephemeral=True)
         return
         
     channel = interaction.guild.get_channel(channel_id)
@@ -249,14 +434,12 @@ async def bot_info(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=False)
     guild_id_str = str(interaction.guild.id)
 
-    # 1. Channels for this server
     m_chan_id = active_channels.get(guild_id_str)
     h_chan_id = hatching_channels.get(guild_id_str)
     
     m_chan_str = f"<#{m_chan_id}>" if m_chan_id else "Not Set"
     h_chan_str = f"<#{h_chan_id}>" if h_chan_id else "Not Set"
 
-    # 2. Merchant roles for this server
     guild_roles = merchant_roles.get(guild_id_str, {})
     merchants = ["Ancient Merchant", "Honey & Dungeon Merchant", "Paradox Merchant"]
     roles_text = ""
@@ -265,7 +448,6 @@ async def bot_info(interaction: discord.Interaction):
         r_mention = f"<@&{r_id}>" if r_id else "Not Linked"
         roles_text += f"- **{m}**: {r_mention}\n"
 
-    # 3. Linked accounts summary (users in this guild with accounts)
     linked_users_text = ""
     for discord_uid, accounts in linked_accounts.items():
         member = interaction.guild.get_member(int(discord_uid))
@@ -277,7 +459,6 @@ async def bot_info(interaction: discord.Interaction):
     if not linked_users_text:
         linked_users_text = "No server members have linked accounts yet."
 
-    # Build Embed
     embed = discord.Embed(title=f"📊 Bot Status & Info: {interaction.guild.name}", color=discord.Color.dark_blue())
     embed.add_field(name="📢 Configured Channels", value=f"**merchants_channel:** {m_chan_str}\n**hatching_channel:** {h_chan_str}", inline=False)
     embed.add_field(name="🛡️ Linked Merchant Roles", value=roles_text, inline=False)
@@ -344,7 +525,7 @@ async def disconnect(interaction: discord.Interaction, username: str):
     user_accounts = linked_accounts.get(discord_user_id, [])
 
     if not user_accounts:
-        await interaction.followup.send("⚠️️ You don't have any Roblox accounts linked to your profile.", ephemeral=True)
+        await interaction.followup.send("⚠ You don't have any Roblox accounts linked to your profile.", ephemeral=True)
         return
 
     found_account = None
