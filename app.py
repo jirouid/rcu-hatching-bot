@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 from flask import Flask
 import discord
 from discord import app_commands
@@ -82,8 +83,32 @@ async def on_ready():
 
 
 # ==========================================
-# 3. BACKGROUND TASKS (Merchants & Hatches)
+# 3. BACKGROUND TASKS & DIRECTORY CACHE
 # ==========================================
+pets_directory_cache = {}
+last_directory_fetch = 0
+
+async def get_pets_directory(session):
+    global pets_directory_cache, last_directory_fetch
+    current_time = time.time()
+    
+    # Use cache if it's less than 30 minutes old
+    if pets_directory_cache and (current_time - last_directory_fetch) < 1800:
+        return pets_directory_cache
+
+    try:
+        async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/directories/pets") as resp:
+            if resp.status == 200:
+                res_json = await resp.json()
+                pets_directory_cache = res_json.get("entries", res_json)
+                last_directory_fetch = current_time
+                return pets_directory_cache
+    except Exception as e:
+        print(f"Error fetching pet directory: {e}")
+    
+    return pets_directory_cache
+
+
 @tasks.loop(minutes=1)
 async def merchant_announcement_loop():
     now = datetime.now(TUNISIA_TZ)
@@ -189,14 +214,7 @@ async def fetch_roblox_avatar(session, user_id):
 
 # Helper to build embed data from a hatch entry
 async def build_hatch_embed_from_data(session, hatch, display_name):
-    pets_directory = {}
-    try:
-        async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/directories/pets") as resp:
-            if resp.status == 200:
-                res_json = await resp.json()
-                pets_directory = res_json.get("entries", res_json)
-    except Exception as e:
-        print(f"Error fetching pet directory: {e}")
+    pets_directory = await get_pets_directory(session)
 
     clan_tag = hatch.get("clanTag", "")
     clan_display = f"[{clan_tag}] " if clan_tag else ""
@@ -241,8 +259,6 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
         asset_id = extract_asset_id(raw_asset_str)
         if asset_id:
             image_url = await fetch_roblox_thumbnail(session, asset_id)
-    
-    print(f"[IMAGE DEBUG] Pet: {item_name} | Tier: {tier} | Resolved Thumbnail URL: {image_url}")
 
     avatar_url = await fetch_roblox_avatar(session, user_id)
 
@@ -525,13 +541,7 @@ async def load_hatching_image(interaction: discord.Interaction):
                 item_name = item_info.get("name", "Unknown")
                 tier = item_info.get("tier", 1)
 
-                # Test fetching directory to inspect image mapping errors directly in chat
-                async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/directories/pets") as dir_resp:
-                    if dir_resp.status != 200:
-                        await interaction.followup.send(f"❌ Directory API Error: Status code `{dir_resp.status}`", ephemeral=True)
-                        return
-                    dir_json = await dir_resp.json()
-                    pets_directory = dir_json.get("entries", dir_json)
+                pets_directory = await get_pets_directory(session)
 
                 pet_data = {}
                 if isinstance(pets_directory, dict):
