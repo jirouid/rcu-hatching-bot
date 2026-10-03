@@ -8,6 +8,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from datetime import datetime, timedelta
 import pytz
+import aiohttp
 from dotenv import load_dotenv
 
 # Load local environment variables
@@ -28,7 +29,7 @@ def load_data():
                 return json.load(f)
         except Exception as e:
             print(f"⚠️ Error loading settings file: {e}")
-    return {"active_channels": {}, "merchant_roles": {}}
+    return {"active_channels": {}, "merchant_roles": {}, "linked_accounts": {}}
 
 def save_data(data):
     """Saves current settings to the JSON file."""
@@ -42,6 +43,7 @@ def save_data(data):
 db = load_data()
 active_channels = db.get("active_channels", {})  # Format: {guild_id_str: channel_id}
 merchant_roles = db.get("merchant_roles", {})    # Format: {guild_id_str: {merchant_name: role_id}}
+linked_accounts = db.get("linked_accounts", {})  # Format: {discord_user_id_str: [{"username": str, "id": int}]}
 
 
 # ==========================================
@@ -145,7 +147,7 @@ async def before_merchant_loop():
 
 
 # ==========================================
-# 4. CUSTOM SLASH COMMANDS
+# 4. CUSTOM SLASH COMMANDS (Merchant Setup)
 # ==========================================
 
 @bot.tree.command(name="activate_merchants", description="Enable merchant notifications in a specific channel.")
@@ -155,8 +157,11 @@ async def activate_merchants(interaction: discord.Interaction, channel: discord.
     guild_id = str(interaction.guild.id)
     active_channels[guild_id] = channel.id
     
-    # Save updates to disk
-    save_data({"active_channels": active_channels, "merchant_roles": merchant_roles})
+    save_data({
+        "active_channels": active_channels, 
+        "merchant_roles": merchant_roles,
+        "linked_accounts": linked_accounts
+    })
     
     await interaction.response.send_message(f"✅ Merchant notifications have been activated and set to {channel.mention}!", ephemeral=True)
 
@@ -168,12 +173,15 @@ async def desactivate_merchants(interaction: discord.Interaction):
     if guild_id in active_channels:
         del active_channels[guild_id]
         
-        # Save updates to disk
-        save_data({"active_channels": active_channels, "merchant_roles": merchant_roles})
+        save_data({
+            "active_channels": active_channels, 
+            "merchant_roles": merchant_roles,
+            "linked_accounts": linked_accounts
+        })
         
         await interaction.response.send_message("🛑 Merchant notifications have been deactivated.", ephemeral=True)
     else:
-        await interaction.response.send_message("⚠️ Merchant notifications are not currently active in this server.", ephemeral=True)
+        await interaction.response.send_message("⚠️️ Merchant notifications are not currently active in this server.", ephemeral=True)
 
 
 @bot.tree.command(name="link_role_to_merchant", description="Link a specific role to ping for a chosen merchant.")
@@ -194,14 +202,135 @@ async def link_role_to_merchant(interaction: discord.Interaction, merchant_name:
     
     merchant_roles[guild_id][merchant_name] = role.id
     
-    # Save updates to disk
-    save_data({"active_channels": active_channels, "merchant_roles": merchant_roles})
+    save_data({
+        "active_channels": active_channels, 
+        "merchant_roles": merchant_roles,
+        "linked_accounts": linked_accounts
+    })
     
     await interaction.response.send_message(f"🔗 Successfully linked **{merchant_name}** notifications to role {role.mention}!", ephemeral=True)
 
 
 # ==========================================
-# 5. START BOTH THREADS
+# 5. ROBLOX ACCOUNT LINKING COMMANDS
+# ==========================================
+
+@bot.tree.command(name="connect", description="Connect a Roblox account using username or ID (supports multiple accounts)")
+@app_commands.describe(query="Your Roblox username or Roblox ID")
+async def connect(interaction: discord.Interaction, query: str):
+    await interaction.response.defer(ephemeral=True)
+    
+    roblox_id = None
+    roblox_name = None
+
+    async with aiohttp.ClientSession() as session:
+        # Check if query is a numeric ID
+        if query.isdigit():
+            url = f"https://users.roblox.com/v1/users/{query}"
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    roblox_id = data.get("id")
+                    roblox_name = data.get("name")
+        else:
+            # Otherwise search by username
+            payload = {"usernames": [query], "excludeBannedUsers": True}
+            async with session.post("https://users.roblox.com/v1/usernames/users", json=payload) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    users = data.get("data", [])
+                    if users:
+                        roblox_id = users[0]["id"]
+                        roblox_name = users[0]["name"]
+
+    if not roblox_id or not roblox_name:
+        await interaction.followup.send(f"⚠️ Could not verify a valid Roblox account with input: **{query}**.", ephemeral=True)
+        return
+
+    discord_user_id = str(interaction.user.id)
+    if discord_user_id not in linked_accounts:
+        linked_accounts[discord_user_id] = []
+
+    # Check if this specific account is already linked to this user
+    if any(acc["id"] == roblox_id for acc in linked_accounts[discord_user_id]):
+        await interaction.followup.send(f"⚠️ The Roblox account **{roblox_name}** (`ID: {roblox_id}`) is already connected to your profile!", ephemeral=True)
+        return
+
+    # Add account and save to file
+    linked_accounts[discord_user_id].append({"username": roblox_name, "id": roblox_id})
+    save_data({
+        "active_channels": active_channels, 
+        "merchant_roles": merchant_roles,
+        "linked_accounts": linked_accounts
+    })
+
+    await interaction.followup.send(f"✅ Successfully connected Roblox account **{roblox_name}** (`ID: {roblox_id}`) to your profile!", ephemeral=True)
+
+
+@bot.tree.command(name="disconnect", description="Disconnect a Roblox account from your profile using its username or ID")
+@app_commands.describe(query="The Roblox username or ID you want to remove")
+async def disconnect(interaction: discord.Interaction, query: str):
+    await interaction.response.defer(ephemeral=True)
+    
+    discord_user_id = str(interaction.user.id)
+    user_accounts = linked_accounts.get(discord_user_id, [])
+
+    if not user_accounts:
+        await interaction.followup.send("⚠️ You don't have any Roblox accounts linked to your profile.", ephemeral=True)
+        return
+
+    # Find the account by name or ID
+    found_account = None
+    for acc in user_accounts:
+        if str(acc["id"]) == query or acc["username"].lower() == query.lower():
+            found_account = acc
+            break
+
+    if not found_account:
+        await interaction.followup.send(f"⚠️ Could not find a linked account matching **{query}** in your profile.", ephemeral=True)
+        return
+
+    user_accounts.remove(found_account)
+    if not user_accounts:
+        del linked_accounts[discord_user_id]
+
+    save_data({
+        "active_channels": active_channels, 
+        "merchant_roles": merchant_roles,
+        "linked_accounts": linked_accounts
+    })
+
+    await interaction.followup.send(f"✅ Successfully disconnected **{found_account['username']}** (`ID: {found_account['id']}`) from your profile.", ephemeral=True)
+
+
+@bot.tree.command(name="account_info", description="View connected Roblox accounts for yourself or another user")
+@app_commands.describe(user="Optional: Choose a Discord user to check")
+async def account_info(interaction: discord.Interaction, user: discord.User = None):
+    await interaction.response.defer(ephemeral=False)
+    
+    target_user = user if user else interaction.user
+    discord_user_id = str(target_user.id)
+    user_accounts = linked_accounts.get(discord_user_id, [])
+
+    if not user_accounts:
+        msg = f"⚠️ **{target_user.name}** doesn't have any Roblox accounts linked yet!" if user else "⚠️ You don't have any Roblox accounts linked yet! Use `/connect` first."
+        await interaction.followup.send(msg, ephemeral=True)
+        return
+
+    # Build the list matching your exact requested shape
+    account_lines = [f"{i}. {acc['username']} (ID: {acc['id']})" for i, acc in enumerate(user_accounts, 1)]
+    formatted_text = f"Your Connected Accounts ({len(user_accounts)})\n" + "\n".join(account_lines)
+
+    embed = discord.Embed(
+        title=f"🔗 Connected Accounts for {target_user.name}",
+        description=f"```text\n{formatted_text}\n```",
+        color=discord.Color.blue()
+    )
+    await interaction.followup.send(embed=embed)
+
+
+# ==========================================
+# 6. START BOTH THREADS
 # ==========================================
 if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask)
