@@ -362,7 +362,7 @@ async def hatching_announcement_loop():
                     continue
                 
                 try:
-                    message_content = f"Congrats <@{matched_discord_id}> ! 🎉"
+                    message_content = f"> Congrats <@{matched_discord_id}> ! 🎉"
                     await channel.send(content=message_content, embed=embed)
                 except Exception as e:
                     print(f"Failed to send hatch notification in guild {guild_id_str}: {e}")
