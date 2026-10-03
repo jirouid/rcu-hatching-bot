@@ -107,7 +107,7 @@ async def merchant_announcement_loop():
             role_id = guild_roles.get(merchant_type)
             role_mention = f"<@&{role_id}>" if role_id else "@here"
             
-            embed = discord.Embed(title="🛒 Merchant Alert!", description="🎟️️ **Ancient Ticket Merchant** has arrived!", color=discord.Color.gold())
+            embed = discord.Embed(title="🛒 Merchant Alert!", description="🎟 **Ancient Ticket Merchant** has arrived!", color=discord.Color.gold())
             embed.add_field(name="Status", value=f"Leaves <t:{unix_timestamp}:R>", inline=False)
             
             try:
@@ -177,7 +177,6 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     egg_name = hatch.get("eggName", "Unknown")
     eggs_opened = hatch.get("eggsOpened", 0)
     
-    # Correct chances: 'chance' is item drop chance, 'playerChance' is player luck adjusted chance
     chance = hatch.get("chance", 0)
     player_chance = hatch.get("playerChance", 0)
     serial = hatch.get("serial", 0)
@@ -187,9 +186,17 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     tier = item_info.get("tier", 1) # 1: normal, 2: golden, 3: toxic, 4: galaxy
     is_shiny = item_info.get("shiny", False)
 
+    # Safely extract pet info from directory
     pet_data = pets_directory.get(item_name, {})
-    rarity = pet_data.get("rarity", "secret").lower()
-    images = pet_data.get("images", [])
+    if not pet_data and isinstance(pets_directory, dict):
+        # Fallback check if keys differ by case or structure
+        for k, v in pets_directory.items():
+            if k.lower() == item_name.lower():
+                pet_data = v
+                break
+
+    rarity = pet_data.get("rarity", "secret").lower() if isinstance(pet_data, dict) else "secret"
+    images = pet_data.get("images", []) if isinstance(pet_data, dict) else []
 
     image_url = None
     img_index = tier - 1 if 0 <= (tier - 1) < len(images) else 0
@@ -235,12 +242,13 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
 
     formatted_eggs_opened = f"{eggs_opened:,.0f}" if eggs_opened < 1000000 else f"{eggs_opened / 1000000:.2f}M" if eggs_opened < 1000000000 else f"{eggs_opened / 1000000000:.2f}B"
     
+    # Correct fraction formatting for probabilities
     formatted_chance = f"1/{int(1/chance):,}" if chance > 0 else "N/A"
     formatted_player_chance = f"1/{int(1/player_chance):,}" if player_chance > 0 else "N/A"
 
     description_text = (
-        f"🔥 **Congrats! {flag}** {display_name} **hatched a**\n"
-        f"**{tier_prefix} {item_name}!**\n\n"
+        f"### 🔥 Congrats! {flag} {display_name} hatched a\n"
+        f"### {tier_prefix} {item_name}!\n\n"
         f"🥚 **Egg:** {egg_name} (`{formatted_eggs_opened} opened`)\n"
         f"🎲 **Rarity:** `{formatted_chance}`\n"
         f"⭐ **Serial:** `#{serial}`\n\n"
@@ -263,16 +271,6 @@ async def hatching_announcement_loop():
         return
 
     async with aiohttp.ClientSession() as session:
-        pets_directory = {}
-        try:
-            async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/directories/pets") as resp:
-                if resp.status == 200:
-                    res_json = await resp.json()
-                    pets_directory = res_json.get("entries", res_json)
-        except Exception as e:
-            print(f"Error fetching pet directory: {e}")
-            return
-
         try:
             async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/pet-hatches") as resp:
                 if resp.status != 200:
@@ -363,9 +361,9 @@ async def activate_hatching(interaction: discord.Interaction, channel: discord.T
     await interaction.response.send_message(f"✅ Hatching channel has been set to {channel.mention}!", ephemeral=True)
 
 
-@bot.tree.command(name="desactivate_merchants", description="Stop sending merchant notifications.")
+@bot.tree.command(name="deactivate_merchants", description="Stop sending merchant notifications.")
 @app_commands.default_permissions(manage_channels=True)
-async def desactivate_merchants(interaction: discord.Interaction):
+async def deactivate_merchants(interaction: discord.Interaction):
     guild_id = str(interaction.guild.id)
     if guild_id in active_channels:
         del active_channels[guild_id]
@@ -373,6 +371,18 @@ async def desactivate_merchants(interaction: discord.Interaction):
         await interaction.response.send_message("🛑 Merchant notifications have been deactivated.", ephemeral=True)
     else:
         await interaction.response.send_message("⚠️ Merchant notifications are not currently active in this server.", ephemeral=True)
+
+
+@bot.tree.command(name="deactivate_hatching", description="Stop sending hatching notifications.")
+@app_commands.default_permissions(manage_channels=True)
+async def deactivate_hatching(interaction: discord.Interaction):
+    guild_id = str(interaction.guild.id)
+    if guild_id in hatching_channels:
+        del hatching_channels[guild_id]
+        save_setting("hatching_channels", hatching_channels)
+        await interaction.response.send_message("🛑 Hatching notifications have been deactivated.", ephemeral=True)
+    else:
+        await interaction.response.send_message("⚠️ Hatching notifications are not currently active in this server.", ephemeral=True)
 
 
 @bot.tree.command(name="link_role_to_merchant", description="Link a specific role to ping for a chosen merchant.")
@@ -410,7 +420,7 @@ async def test_merchant(interaction: discord.Interaction, merchant_name: str):
         
     channel = interaction.guild.get_channel(channel_id)
     if not channel:
-        await interaction.response.send_message("⚠️ The configured merchant channel could not be found.", ephemeral=True)
+        await interaction.response.send_message("⚠️️ The configured merchant channel could not be found.", ephemeral=True)
         return
 
     guild_roles = merchant_roles.get(guild_id_str, {})
