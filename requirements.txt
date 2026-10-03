@@ -1,0 +1,6 @@
+discord.py
+aiohttp
+pytz
+python-dotenv
+flask
+gunicorn
