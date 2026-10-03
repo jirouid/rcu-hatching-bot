@@ -66,6 +66,7 @@ def run_flask():
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True  # <--- ADD THIS LINE
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
