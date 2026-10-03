@@ -315,7 +315,7 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     # Restored organized layout with clean fields and proper spacing
     embed.add_field(
         name="", 
-        value=f"**🔥 Congrats! {flag} {display_name} hatched a {tier_prefix} {item_name}!{shiny_suffix}**", 
+        value=f"## 🔥 Congrats! {flag} {display_name} hatched a {tier_prefix} {item_name}!{shiny_suffix}", 
         inline=False
     )
     
