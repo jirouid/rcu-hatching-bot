@@ -173,7 +173,6 @@ async def fetch_roblox_avatar(session, user_id):
         print(f"Error fetching Roblox avatar for user {user_id}: {e}")
     return None
 
-# Helper to build embed data from a hatch entry
 async def build_hatch_embed_from_data(session, hatch, display_name):
     pets_directory = {}
     try:
@@ -199,10 +198,9 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     
     item_info = hatch.get("item", {})
     item_name = item_info.get("name", "Unknown Pet")
-    tier = item_info.get("tier", 1) # 1: normal, 2: golden, 3: toxic, 4: galaxy
+    tier = item_info.get("tier", 1) 
     is_shiny = item_info.get("shiny", False)
 
-    # Safely extract pet info from directory supporting list or dict structures
     pet_data = {}
     if isinstance(pets_directory, dict):
         pet_data = pets_directory.get(item_name, {})
@@ -225,13 +223,9 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     if images:
         image_url = format_asset_url(images[img_index])
 
-    # Fetch Roblox user avatar for author icon image
     avatar_url = await fetch_roblox_avatar(session, user_id)
 
-    # Proper naming prefix
     prefix_parts = []
-    if is_shiny:
-        prefix_parts.append("Shiny")
     if tier == 2:
         prefix_parts.append("Golden")
     elif tier == 3:
@@ -245,6 +239,8 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
         prefix_parts.append("Secret")
 
     tier_prefix = " ".join(prefix_parts)
+    if is_shiny:
+        tier_prefix = f"Shiny {tier_prefix} ✨"
 
     embed_color = discord.Color.red()
     if tier == 2:
@@ -276,27 +272,30 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     if image_url:
         embed.set_thumbnail(url=image_url)
 
-    # Clean structured fields to guarantee uniform card width and spacing
+    # Invisible spacer formatting blocks to enforce uniform width (~1.5x visual width)
+    spacer = "᠎" * 45
+
     embed.add_field(
         name="", 
-        value=f"### 🔥 Congrats! {flag} {display_name} hatched a\n### {tier_prefix} {item_name}!", 
+        value=f"### 🔥 Congrats! {flag} {display_name} hatched a\n### {tier_prefix} {item_name}!\n{spacer}", 
         inline=False
     )
     
     embed.add_field(
         name="", 
         value=(
-            f"🥚 **Egg:** {egg_name} (`{formatted_eggs_opened} opened`)\n"
-            f"🎲 **Rarity:** `{formatted_chance}`\n"
-            f"⭐ **Serial:** `#{serial}`"
+            f"🥚 **Egg:** {egg_name} (`{formatted_eggs_opened} opened`)\n\n"
+            f"🎲 **Rarity:** `{formatted_chance}`\n\n"
+            f"⭐ **Serial:** `#{serial}`\n"
+            f"{spacer}"
         ), 
         inline=False
     )
     
     embed.add_field(
-        name="📘 Player's Stats:", 
+        name="📘 **Player's Stats:**", 
         value=(
-            f"Total Eggs Opened: {formatted_eggs_opened}\n"
+            f"Total Eggs Opened: {formatted_eggs_opened}\n\n"
             f"Rarity: `{formatted_player_chance}`"
         ), 
         inline=False
@@ -362,7 +361,7 @@ async def hatching_announcement_loop():
                     continue
                 
                 try:
-                    message_content = f"Congrats <@{matched_discord_id}> ! 🎉"
+                    message_content = f"> Congrats <@{matched_discord_id}> ! 🎉"
                     await channel.send(content=message_content, embed=embed)
                 except Exception as e:
                     print(f"Failed to send hatch notification in guild {guild_id_str}: {e}")
@@ -504,7 +503,7 @@ async def show_global_hatch(interaction: discord.Interaction):
                 fake_username = "TestUser"
                 embed = await build_hatch_embed_from_data(session, latest_hatch, fake_username)
                 
-                await interaction.followup.send(content=f"Congrats <@{interaction.user.id}> ! 🎉", embed=embed, ephemeral=False)
+                await interaction.followup.send(content=f"> Congrats <@{interaction.user.id}> ! 🎉", embed=embed, ephemeral=False)
         except Exception as e:
             await interaction.followup.send(f"❌ Error fetching from API: {e}", ephemeral=True)
 
@@ -579,7 +578,7 @@ async def connect(interaction: discord.Interaction, username: str):
                         roblox_name = users[0]["name"]
 
     if not roblox_id or not roblox_name:
-        await interaction.followup.send(f"⚠️ Could not verify a valid Roblox account with input: **{username}**.", ephemeral=True)
+        await interaction.followup.send(f"⚠️️ Could not verify a valid Roblox account with input: **{username}**.", ephemeral=True)
         return
 
     discord_user_id = str(interaction.user.id)
@@ -659,7 +658,7 @@ if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.start()
 
-    case TOKEN:
+    if TOKEN:
         bot.run(TOKEN)
     else:
         print("❌ Error: DISCORD_TOKEN is missing!")
