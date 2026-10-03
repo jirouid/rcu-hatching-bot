@@ -158,6 +158,21 @@ def country_to_flag(country_code):
     code = country_code.upper()
     return chr(127397 + ord(code[0])) + chr(127397 + ord(code[1]))
 
+async def fetch_roblox_avatar(session, user_id):
+    if not user_id:
+        return None
+    try:
+        url = f"https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds={user_id}&size=150x150&format=Png&isCircular=false"
+        async with session.get(url) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                data_list = data.get("data", [])
+                if data_list:
+                    return data_list[0].get("imageUrl")
+    except Exception as e:
+        print(f"Error fetching Roblox avatar for user {user_id}: {e}")
+    return None
+
 # Helper to build embed data from a hatch entry
 async def build_hatch_embed_from_data(session, hatch, display_name):
     pets_directory = {}
@@ -180,6 +195,7 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     chance = hatch.get("chance", 0)
     player_chance = hatch.get("playerChance", 0)
     serial = hatch.get("serial", 0)
+    user_id = hatch.get("userId")
     
     item_info = hatch.get("item", {})
     item_name = item_info.get("name", "Unknown Pet")
@@ -189,7 +205,6 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     # Safely extract pet info from directory
     pet_data = pets_directory.get(item_name, {})
     if not pet_data and isinstance(pets_directory, dict):
-        # Fallback check if keys differ by case or structure
         for k, v in pets_directory.items():
             if k.lower() == item_name.lower():
                 pet_data = v
@@ -202,6 +217,9 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     img_index = tier - 1 if 0 <= (tier - 1) < len(images) else 0
     if images:
         image_url = format_asset_url(images[img_index])
+
+    # Fetch Roblox user avatar for author icon image
+    avatar_url = await fetch_roblox_avatar(session, user_id)
 
     # Proper naming prefix
     prefix_parts = []
@@ -242,7 +260,6 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
 
     formatted_eggs_opened = f"{eggs_opened:,.0f}" if eggs_opened < 1000000 else f"{eggs_opened / 1000000:.2f}M" if eggs_opened < 1000000000 else f"{eggs_opened / 1000000000:.2f}B"
     
-    # Correct fraction formatting for probabilities
     formatted_chance = f"1/{int(1/chance):,}" if chance > 0 else "N/A"
     formatted_player_chance = f"1/{int(1/player_chance):,}" if player_chance > 0 else "N/A"
 
@@ -254,11 +271,11 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
         f"⭐ **Serial:** `#{serial}`\n\n"
         f"📘 **Player's Stats:**\n"
         f"Total Eggs Opened: {formatted_eggs_opened}\n"
-        f"Rarity: {formatted_player_chance}"
+        f"Rarity: `{formatted_player_chance}`"
     )
 
     embed = discord.Embed(description=description_text, color=embed_color)
-    embed.set_author(name=f"{clan_display}{display_name}")
+    embed.set_author(name=f"{clan_display}{display_name}", icon_url=avatar_url if avatar_url else discord.Embed.Empty)
     if image_url:
         embed.set_thumbnail(url=image_url)
     embed.timestamp = datetime.now()
@@ -370,7 +387,7 @@ async def deactivate_merchants(interaction: discord.Interaction):
         save_setting("active_channels", active_channels)
         await interaction.response.send_message("🛑 Merchant notifications have been deactivated.", ephemeral=True)
     else:
-        await interaction.response.send_message("⚠️ Merchant notifications are not currently active in this server.", ephemeral=True)
+        await interaction.response.send_message("⚠️️ Merchant notifications are not currently active in this server.", ephemeral=True)
 
 
 @bot.tree.command(name="deactivate_hatching", description="Stop sending hatching notifications.")
@@ -415,12 +432,12 @@ async def test_merchant(interaction: discord.Interaction, merchant_name: str):
     channel_id = active_channels.get(guild_id_str)
     
     if not channel_id:
-        await interaction.response.send_message("⚠ No merchant channel is activated here! Use `/activate_merchants` first.", ephemeral=True)
+        await interaction.response.send_message("⚠️ No merchant channel is activated here! Use `/activate_merchants` first.", ephemeral=True)
         return
         
     channel = interaction.guild.get_channel(channel_id)
     if not channel:
-        await interaction.response.send_message("⚠️️ The configured merchant channel could not be found.", ephemeral=True)
+        await interaction.response.send_message("⚠️ The configured merchant channel could not be found.", ephemeral=True)
         return
 
     guild_roles = merchant_roles.get(guild_id_str, {})
@@ -565,7 +582,7 @@ async def disconnect(interaction: discord.Interaction, username: str):
     user_accounts = linked_accounts.get(discord_user_id, [])
 
     if not user_accounts:
-        await interaction.followup.send("⚠ You don't have any Roblox accounts linked to your profile.", ephemeral=True)
+        await interaction.followup.send("⚠️ You don't have any Roblox accounts linked to your profile.", ephemeral=True)
         return
 
     found_account = None
@@ -575,7 +592,7 @@ async def disconnect(interaction: discord.Interaction, username: str):
             break
 
     if not found_account:
-        await interaction.followup.send(f"⚠️ Could not find a linked account matching **{username}** in your profile.", ephemeral=True)
+        await interaction.followup.send(f"⚠️️ Could not find a linked account matching **{username}** in your profile.", ephemeral=True)
         return
 
     user_accounts.remove(found_account)
