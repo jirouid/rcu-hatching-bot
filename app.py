@@ -202,12 +202,19 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     tier = item_info.get("tier", 1) # 1: normal, 2: golden, 3: toxic, 4: galaxy
     is_shiny = item_info.get("shiny", False)
 
-    # Safely extract pet info from directory
-    pet_data = pets_directory.get(item_name, {})
-    if not pet_data and isinstance(pets_directory, dict):
-        for k, v in pets_directory.items():
-            if k.lower() == item_name.lower():
-                pet_data = v
+    # Safely extract pet info from directory supporting list or dict structures
+    pet_data = {}
+    if isinstance(pets_directory, dict):
+        pet_data = pets_directory.get(item_name, {})
+        if not pet_data:
+            for k, v in pets_directory.items():
+                if k.lower() == item_name.lower():
+                    pet_data = v
+                    break
+    elif isinstance(pets_directory, list):
+        for entry in pets_directory:
+            if isinstance(entry, dict) and entry.get("name", "").lower() == item_name.lower():
+                pet_data = entry
                 break
 
     rarity = pet_data.get("rarity", "secret").lower() if isinstance(pet_data, dict) else "secret"
@@ -263,22 +270,38 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     formatted_chance = f"1/{int(1/chance):,}" if chance > 0 else "N/A"
     formatted_player_chance = f"1/{int(1/player_chance):,}" if player_chance > 0 else "N/A"
 
-    description_text = (
-        f"### 🔥 Congrats! {flag} {display_name} hatched a\n"
-        f"### {tier_prefix} {item_name}!\n\n"
-        f"🥚 **Egg:** {egg_name} (`{formatted_eggs_opened} opened`)\n"
-        f"🎲 **Rarity:** `{formatted_chance}`\n"
-        f"⭐ **Serial:** `#{serial}`\n\n"
-        f"📘 **Player's Stats:**\n"
-        f"Total Eggs Opened: {formatted_eggs_opened}\n"
-        f"Rarity: `{formatted_player_chance}`"
-    )
-
-    embed = discord.Embed(description=description_text, color=embed_color)
+    embed = discord.Embed(color=embed_color, timestamp=datetime.now())
     embed.set_author(name=f"{clan_display}{display_name}", icon_url=avatar_url if avatar_url else discord.Embed.Empty)
+    
     if image_url:
         embed.set_thumbnail(url=image_url)
-    embed.timestamp = datetime.now()
+
+    # Clean structured fields to guarantee uniform card width and spacing
+    embed.add_field(
+        name="", 
+        value=f"### 🔥 Congrats! {flag} {display_name} hatched a\n### {tier_prefix} {item_name}!", 
+        inline=False
+    )
+    
+    embed.add_field(
+        name="", 
+        value=(
+            f"🥚 **Egg:** {egg_name} (`{formatted_eggs_opened} opened`)\n"
+            f"🎲 **Rarity:** `{formatted_chance}`\n"
+            f"⭐ **Serial:** `#{serial}`"
+        ), 
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📘 Player's Stats:", 
+        value=(
+            f"Total Eggs Opened: {formatted_eggs_opened}\n"
+            f"Rarity: `{formatted_player_chance}`"
+        ), 
+        inline=False
+    )
+
     return embed
 
 
@@ -387,7 +410,7 @@ async def deactivate_merchants(interaction: discord.Interaction):
         save_setting("active_channels", active_channels)
         await interaction.response.send_message("🛑 Merchant notifications have been deactivated.", ephemeral=True)
     else:
-        await interaction.response.send_message("⚠️️ Merchant notifications are not currently active in this server.", ephemeral=True)
+        await interaction.response.send_message("⚠️ Merchant notifications are not currently active in this server.", ephemeral=True)
 
 
 @bot.tree.command(name="deactivate_hatching", description="Stop sending hatching notifications.")
@@ -592,7 +615,7 @@ async def disconnect(interaction: discord.Interaction, username: str):
             break
 
     if not found_account:
-        await interaction.followup.send(f"⚠️️ Could not find a linked account matching **{username}** in your profile.", ephemeral=True)
+        await interaction.followup.send(f"⚠️ Could not find a linked account matching **{username}** in your profile.", ephemeral=True)
         return
 
     user_accounts.remove(found_account)
@@ -636,7 +659,7 @@ if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.start()
 
-    if TOKEN:
+    case TOKEN:
         bot.run(TOKEN)
     else:
         print("❌ Error: DISCORD_TOKEN is missing!")
