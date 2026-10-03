@@ -22,7 +22,7 @@ TUNISIA_TZ = pytz.timezone('Africa/Tunis')
 if not MONGO_URI:
     print("❌ Error: MONGO_URI environment variable is missing!")
 
-mongo_client = MongoClient(MONGO_URI)
+mongo_client = MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True)
 db = mongo_client["discord_bot_db"]
 
 # Collections
