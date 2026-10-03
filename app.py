@@ -62,7 +62,7 @@ def run_flask():
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True  # Required for viewing server members properly
+intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
@@ -107,7 +107,7 @@ async def merchant_announcement_loop():
             role_id = guild_roles.get(merchant_type)
             role_mention = f"<@&{role_id}>" if role_id else "@here"
             
-            embed = discord.Embed(title="🛒 Merchant Alert!", description="🎟️ **Ancient Ticket Merchant** has arrived!", color=discord.Color.gold())
+            embed = discord.Embed(title="🛒 Merchant Alert!", description="🎟️️ **Ancient Ticket Merchant** has arrived!", color=discord.Color.gold())
             embed.add_field(name="Status", value=f"Leaves <t:{unix_timestamp}:R>", inline=False)
             
             try:
@@ -146,14 +146,12 @@ async def before_merchant_loop():
     await bot.wait_until_ready()
 
 
-# Helper function to convert Roblox asset ID format to standard image URL
 def format_asset_url(asset_str):
     if asset_str and asset_str.startswith("rbxassetid://"):
         asset_id = asset_str.replace("rbxassetid://", "")
         return f"https://assetdelivery.roblox.com/v1/asset?id={asset_id}"
     return None
 
-# Mapping country code to emoji flag
 def country_to_flag(country_code):
     if not country_code or len(country_code) != 2:
         return ""
@@ -161,19 +159,16 @@ def country_to_flag(country_code):
     return chr(127397 + ord(code[0])) + chr(127397 + ord(code[1]))
 
 # Helper to build embed data from a hatch entry
-async def build_hatch_embed_from_data(session, hatch):
-    # Fetch Pet Directory for Rarity and Images
+async def build_hatch_embed_from_data(session, hatch, display_name):
     pets_directory = {}
     try:
         async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/directories/pets") as resp:
             if resp.status == 200:
                 res_json = await resp.json()
-                # Handle structure where entries might be wrapped under 'entries' key or root dict
                 pets_directory = res_json.get("entries", res_json)
     except Exception as e:
         print(f"Error fetching pet directory: {e}")
 
-    user_id = hatch.get("userId")
     clan_tag = hatch.get("clanTag", "")
     clan_display = f"[{clan_tag}] " if clan_tag else ""
     country_code = hatch.get("countryCode", "")
@@ -181,6 +176,9 @@ async def build_hatch_embed_from_data(session, hatch):
     
     egg_name = hatch.get("eggName", "Unknown")
     eggs_opened = hatch.get("eggsOpened", 0)
+    
+    # Correct chances: 'chance' is item drop chance, 'playerChance' is player luck adjusted chance
+    chance = hatch.get("chance", 0)
     player_chance = hatch.get("playerChance", 0)
     serial = hatch.get("serial", 0)
     
@@ -189,7 +187,6 @@ async def build_hatch_embed_from_data(session, hatch):
     tier = item_info.get("tier", 1) # 1: normal, 2: golden, 3: toxic, 4: galaxy
     is_shiny = item_info.get("shiny", False)
 
-    # Lookup pet info in directory
     pet_data = pets_directory.get(item_name, {})
     rarity = pet_data.get("rarity", "secret").lower()
     images = pet_data.get("images", [])
@@ -199,15 +196,23 @@ async def build_hatch_embed_from_data(session, hatch):
     if images:
         image_url = format_asset_url(images[img_index])
 
-    tier_prefix = "Normal"
+    # Proper naming prefix
+    prefix_parts = []
+    if is_shiny:
+        prefix_parts.append("Shiny")
     if tier == 2:
-        tier_prefix = "Golden"
+        prefix_parts.append("Golden")
     elif tier == 3:
-        tier_prefix = "Toxic"
+        prefix_parts.append("Toxic")
     elif tier == 4:
-        tier_prefix = "Galaxy"
-    if is_shiny and tier == 1:
-        tier_prefix = "Secret"
+        prefix_parts.append("Galaxy")
+    
+    if rarity and rarity != "secret":
+        prefix_parts.append(rarity.capitalize())
+    else:
+        prefix_parts.append("Secret")
+
+    tier_prefix = " ".join(prefix_parts)
 
     embed_color = discord.Color.red()
     if tier == 2:
@@ -229,14 +234,15 @@ async def build_hatch_embed_from_data(session, hatch):
             embed_color = discord.Color.from_str("#08ff00")
 
     formatted_eggs_opened = f"{eggs_opened:,.0f}" if eggs_opened < 1000000 else f"{eggs_opened / 1000000:.2f}M" if eggs_opened < 1000000000 else f"{eggs_opened / 1000000000:.2f}B"
+    
+    formatted_chance = f"1/{int(1/chance):,}" if chance > 0 else "N/A"
     formatted_player_chance = f"1/{int(1/player_chance):,}" if player_chance > 0 else "N/A"
 
     description_text = (
-        f"🔥 **Congrats! {flag}**\n"
-        f"**UserID {user_id} hatched a**\n"
+        f"🔥 **Congrats! {flag}** {display_name} **hatched a**\n"
         f"**{tier_prefix} {item_name}!**\n\n"
         f"🥚 **Egg:** {egg_name} (`{formatted_eggs_opened} opened`)\n"
-        f"🎲 **Rarity:** `{formatted_player_chance}`\n"
+        f"🎲 **Rarity:** `{formatted_chance}`\n"
         f"⭐ **Serial:** `#{serial}`\n\n"
         f"📘 **Player's Stats:**\n"
         f"Total Eggs Opened: {formatted_eggs_opened}\n"
@@ -244,7 +250,7 @@ async def build_hatch_embed_from_data(session, hatch):
     )
 
     embed = discord.Embed(description=description_text, color=embed_color)
-    embed.set_author(name=f"{clan_display}UserID: {user_id}", icon_url=image_url if image_url else discord.Embed.Empty)
+    embed.set_author(name=f"{clan_display}{display_name}")
     if image_url:
         embed.set_thumbnail(url=image_url)
     embed.timestamp = datetime.now()
@@ -257,7 +263,6 @@ async def hatching_announcement_loop():
         return
 
     async with aiohttp.ClientSession() as session:
-        # 1. Fetch Pet Directory for Rarity and Images
         pets_directory = {}
         try:
             async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/directories/pets") as resp:
@@ -268,7 +273,6 @@ async def hatching_announcement_loop():
             print(f"Error fetching pet directory: {e}")
             return
 
-        # 2. Fetch Recent Pet Hatches
         try:
             async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/pet-hatches") as resp:
                 if resp.status != 200:
@@ -282,7 +286,6 @@ async def hatching_announcement_loop():
         global processed_hatches
         new_hatches_found = False
 
-        # Process from oldest to newest
         for hatch in reversed(hatches):
             hatch_id = hatch.get("id")
             if hatch_id is None or hatch_id in processed_hatches:
@@ -310,79 +313,7 @@ async def hatching_announcement_loop():
             if not matched_discord_id:
                 continue
 
-            clan_tag = hatch.get("clanTag", "")
-            clan_display = f"[{clan_tag}] " if clan_tag else ""
-            country_code = hatch.get("countryCode", "")
-            flag = country_to_flag(country_code)
-            
-            egg_name = hatch.get("eggName", "Unknown")
-            eggs_opened = hatch.get("eggsOpened", 0)
-            player_chance = hatch.get("playerChance", 0)
-            serial = hatch.get("serial", 0)
-            
-            item_info = hatch.get("item", {})
-            item_name = item_info.get("name", "Unknown Pet")
-            tier = item_info.get("tier", 1)
-            is_shiny = item_info.get("shiny", False)
-
-            pet_data = pets_directory.get(item_name, {})
-            rarity = pet_data.get("rarity", "secret").lower()
-            images = pet_data.get("images", [])
-
-            image_url = None
-            img_index = tier - 1 if 0 <= (tier - 1) < len(images) else 0
-            if images:
-                image_url = format_asset_url(images[img_index])
-
-            tier_prefix = "Normal"
-            if tier == 2:
-                tier_prefix = "Golden"
-            elif tier == 3:
-                tier_prefix = "Toxic"
-            elif tier == 4:
-                tier_prefix = "Galaxy"
-            if is_shiny and tier == 1:
-                tier_prefix = "Secret"
-
-            embed_color = discord.Color.red()
-            if tier == 2:
-                embed_color = discord.Color.from_str("#ffd024")
-            elif tier == 3:
-                embed_color = discord.Color.from_str("#57ed4c")
-            elif tier == 4:
-                embed_color = discord.Color.from_str("#b811ff")
-            else:
-                if rarity == "secret":
-                    embed_color = discord.Color.from_str("#fd4649")
-                elif rarity == "divine":
-                    embed_color = discord.Color.from_str("#ffee00")
-                elif rarity == "supreme":
-                    embed_color = discord.Color.from_str("#ff6600")
-                elif rarity == "mysterious":
-                    embed_color = discord.Color.from_str("#9400fd")
-                elif rarity == "ultimate":
-                    embed_color = discord.Color.from_str("#08ff00")
-
-            formatted_eggs_opened = f"{eggs_opened:,.0f}" if eggs_opened < 1000000 else f"{eggs_opened / 1000000:.2f}M" if eggs_opened < 1000000000 else f"{eggs_opened / 1000000000:.2f}B"
-            formatted_player_chance = f"1/{int(1/player_chance):,}" if player_chance > 0 else "N/A"
-
-            description_text = (
-                f"🔥 **Congrats! {flag}**\n"
-                f"**{roblox_username} hatched a**\n"
-                f"**{tier_prefix} {item_name}!**\n\n"
-                f"🥚 **Egg:** {egg_name} (`{formatted_eggs_opened} opened`)\n"
-                f"🎲 **Rarity:** `{formatted_player_chance}`\n"
-                f"⭐ **Serial:** `#{serial}`\n\n"
-                f"📘 **Player's Stats:**\n"
-                f"Total Eggs Opened: {formatted_eggs_opened}\n"
-                f"Rarity: {formatted_player_chance}"
-            )
-
-            embed = discord.Embed(description=description_text, color=embed_color)
-            embed.set_author(name=f"{clan_display}{roblox_username}", icon_url=image_url if image_url else discord.Embed.Empty)
-            if image_url:
-                embed.set_thumbnail(url=image_url)
-            embed.timestamp = datetime.now()
+            embed = await build_hatch_embed_from_data(session, hatch, roblox_username)
 
             for guild_id_str, chan_id in hatching_channels.items():
                 guild = bot.get_guild(int(guild_id_str))
@@ -393,7 +324,8 @@ async def hatching_announcement_loop():
                     continue
                 
                 try:
-                    await channel.send(content=f"<@{matched_discord_id}>", embed=embed)
+                    message_content = f"Congrats <@{matched_discord_id}> ! 🎉"
+                    await channel.send(content=message_content, embed=embed)
                 except Exception as e:
                     print(f"Failed to send hatch notification in guild {guild_id_str}: {e}")
 
@@ -518,11 +450,11 @@ async def show_global_hatch(interaction: discord.Interaction):
                     await interaction.followup.send("⚠️ API returned zero pet hatches.", ephemeral=True)
                     return
                 
-                # Get the very first item (latest hatch)
                 latest_hatch = hatches[0]
-                embed = await build_hatch_embed_from_data(session, latest_hatch)
+                fake_username = "TestUser"
+                embed = await build_hatch_embed_from_data(session, latest_hatch, fake_username)
                 
-                await interaction.followup.send("🧪 **Here is the latest raw global hatch from the API:**", embed=embed, ephemeral=False)
+                await interaction.followup.send(content=f"Congrats <@{interaction.user.id}> ! 🎉", embed=embed, ephemeral=False)
         except Exception as e:
             await interaction.followup.send(f"❌ Error fetching from API: {e}", ephemeral=True)
 
