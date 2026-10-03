@@ -225,16 +225,14 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     if images:
         image_url = format_asset_url(images[img_index])
     
-    # [TESTING LOG] Check if image URL is correctly parsed
-    print(f"[IMAGE TEST] Pet: {item_name} | Tier: {tier} | Image URL: {image_url}")
+    print(f"[IMAGE DEBUG] Pet: {item_name} | Tier: {tier} | Image URL: {image_url}")
 
-    # Fetch Roblox user avatar for author icon image
     avatar_url = await fetch_roblox_avatar(session, user_id)
 
-    # Proper naming prefix with sparkling emoji for shiny pets
+    # Proper naming prefix matching your preferred format
     prefix_parts = []
     if is_shiny:
-        prefix_parts.append("🌟 Shiny")
+        prefix_parts.append("Shiny")
     
     if tier == 2:
         prefix_parts.append("Golden")
@@ -249,6 +247,7 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
         prefix_parts.append("Secret")
 
     tier_prefix = " ".join(prefix_parts)
+    shiny_suffix = " ✨" if is_shiny else ""
 
     embed_color = discord.Color.red()
     if tier == 2:
@@ -271,7 +270,6 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
 
     formatted_eggs_opened = f"{eggs_opened:,.0f}" if eggs_opened < 1000000 else f"{eggs_opened / 1000000:.2f}M" if eggs_opened < 1000000000 else f"{eggs_opened / 1000000000:.2f}B"
     
-    # Game uses 100 / chance formula
     formatted_chance = f"1/{int(100 / chance):,}" if chance > 0 else "N/A"
     formatted_player_chance = f"1/{int(100 / player_chance):,}" if player_chance > 0 else "N/A"
 
@@ -281,19 +279,28 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     if image_url:
         embed.set_thumbnail(url=image_url)
 
-    # Simplified, wider layout avoiding stretched vertical stacking
+    # Restored organized layout with clean fields and proper spacing
     embed.add_field(
-        name="🎉 Hatch Successful!", 
-        value=f"🔥 {flag} **{display_name}** hatched a **{tier_prefix} {item_name}**!", 
+        name="", 
+        value=f"🔥 Congrats! {flag} {display_name} hatched a\n{tier_prefix} {item_name}!{shiny_suffix}", 
         inline=False
     )
     
     embed.add_field(
-        name="📊 Details", 
+        name="", 
         value=(
-            f"🥚 **Egg:** {egg_name} (`{formatted_eggs_opened}`)\n"
-            f"🎲 **Rarity:** `{formatted_chance}` | ⭐ **Serial:** `#{serial}`\n"
-            f"📈 **Player Rarity:** `{formatted_player_chance}`"
+            f"🥚 **Egg:** {egg_name} (`{formatted_eggs_opened} opened`)\n"
+            f"🎲 **Rarity:** `{formatted_chance}`\n"
+            f"⭐ **Serial:** `#{serial}`"
+        ), 
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📘 Player's Stats:", 
+        value=(
+            f"Total Eggs Opened: {formatted_eggs_opened}\n"
+            f"Rarity: `{formatted_player_chance}`"
         ), 
         inline=False
     )
@@ -478,16 +485,16 @@ async def test_merchant(interaction: discord.Interaction, merchant_name: str):
     await interaction.response.send_message(f"✅ Test alert for **{merchant_name}** successfully sent to {channel.mention}!", ephemeral=True)
 
 
-@bot.tree.command(name="show_global_hatch", description="Test command: Pulls and displays the absolute latest global hatch right now.")
+@bot.tree.command(name="load_hatching_image", description="Test command: Pulls the latest global hatch and reports any image loading errors.")
 @app_commands.default_permissions(manage_channels=True)
-async def show_global_hatch(interaction: discord.Interaction):
+async def load_hatching_image(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/pet-hatches") as resp:
                 if resp.status != 200:
-                    await interaction.followup.send(f"❌ Failed to reach API (Status code: {resp.status})", ephemeral=True)
+                    await interaction.followup.send(f"❌ API Error: Status code `{resp.status}`", ephemeral=True)
                     return
                 data = await resp.json()
                 hatches = data.get("petHatches", [])
@@ -497,12 +504,45 @@ async def show_global_hatch(interaction: discord.Interaction):
                     return
                 
                 latest_hatch = hatches[0]
+                item_info = latest_hatch.get("item", {})
+                item_name = item_info.get("name", "Unknown")
+                tier = item_info.get("tier", 1)
+
+                # Test fetching directory to inspect image mapping errors directly in chat
+                async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/directories/pets") as dir_resp:
+                    if dir_resp.status != 200:
+                        await interaction.followup.send(f"❌ Directory API Error: Status code `{dir_resp.status}`", ephemeral=True)
+                        return
+                    dir_json = await dir_resp.json()
+                    pets_directory = dir_json.get("entries", dir_json)
+
+                pet_data = {}
+                if isinstance(pets_directory, dict):
+                    pet_data = pets_directory.get(item_name, {})
+                elif isinstance(pets_directory, list):
+                    for entry in pets_directory:
+                        if isinstance(entry, dict) and entry.get("name", "").lower() == item_name.lower():
+                            pet_data = entry
+                            break
+
+                images = pet_data.get("images", []) if isinstance(pet_data, dict) else []
+                img_index = tier - 1 if 0 <= (tier - 1) < len(images) else 0
+                raw_asset = images[img_index] if images and len(images) > img_index else None
+                resolved_url = format_asset_url(raw_asset) if raw_asset else None
+
+                if not resolved_url:
+                    await interaction.followup.send(
+                        f"⚠️ **Image Error/Missing:** Could not resolve image for pet `{item_name}` (Tier: {tier}).\n"
+                        f"Raw Directory Images Found: `{images}`", ephemeral=True
+                    )
+                    return
+
                 fake_username = "TestUser"
                 embed = await build_hatch_embed_from_data(session, latest_hatch, fake_username)
-                
-                await interaction.followup.send(content=f"Congrats <@{interaction.user.id}> ! 🎉", embed=embed, ephemeral=False)
+                await interaction.followup.send(content=f"✅ Image loaded successfully! Resolved URL: `{resolved_url}`", embed=embed, ephemeral=False)
+
         except Exception as e:
-            await interaction.followup.send(f"❌ Error fetching from API: {e}", ephemeral=True)
+            await interaction.followup.send(f"❌ Exception caught while loading image: ```python\n{str(e)}\n```", ephemeral=True)
 
 
 @bot.tree.command(name="bot_info", description="Displays bot configurations and linked accounts for this server.")
