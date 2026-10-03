@@ -146,10 +146,24 @@ async def before_merchant_loop():
     await bot.wait_until_ready()
 
 
-def format_asset_url(asset_str):
+def extract_asset_id(asset_str):
     if asset_str and asset_str.startswith("rbxassetid://"):
-        asset_id = asset_str.replace("rbxassetid://", "")
-        return f"https://assetdelivery.roblox.com/v1/asset?id={asset_id}"
+        return asset_str.replace("rbxassetid://", "")
+    return None
+
+async def fetch_roblox_thumbnail(session, asset_id):
+    if not asset_id:
+        return None
+    try:
+        url = f"https://thumbnails.roblox.com/v1/assets?assetIds={asset_id}&size=150x150&format=Png&isCircular=false"
+        async with session.get(url) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                data_list = data.get("data", [])
+                if data_list:
+                    return data_list[0].get("imageUrl")
+    except Exception as e:
+        print(f"Error fetching Roblox thumbnail for asset {asset_id}: {e}")
     return None
 
 def country_to_flag(country_code):
@@ -222,10 +236,13 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
 
     image_url = None
     img_index = tier - 1 if 0 <= (tier - 1) < len(images) else 0
-    if images:
-        image_url = format_asset_url(images[img_index])
+    if images and len(images) > img_index:
+        raw_asset_str = images[img_index]
+        asset_id = extract_asset_id(raw_asset_str)
+        if asset_id:
+            image_url = await fetch_roblox_thumbnail(session, asset_id)
     
-    print(f"[IMAGE DEBUG] Pet: {item_name} | Tier: {tier} | Image URL: {image_url}")
+    print(f"[IMAGE DEBUG] Pet: {item_name} | Tier: {tier} | Resolved Thumbnail URL: {image_url}")
 
     avatar_url = await fetch_roblox_avatar(session, user_id)
 
@@ -528,18 +545,19 @@ async def load_hatching_image(interaction: discord.Interaction):
                 images = pet_data.get("images", []) if isinstance(pet_data, dict) else []
                 img_index = tier - 1 if 0 <= (tier - 1) < len(images) else 0
                 raw_asset = images[img_index] if images and len(images) > img_index else None
-                resolved_url = format_asset_url(raw_asset) if raw_asset else None
+                asset_id = extract_asset_id(raw_asset) if raw_asset else None
+                resolved_url = await fetch_roblox_thumbnail(session, asset_id) if asset_id else None
 
                 if not resolved_url:
                     await interaction.followup.send(
-                        f"⚠️ **Image Error/Missing:** Could not resolve image for pet `{item_name}` (Tier: {tier}).\n"
+                        f"⚠️ **Image Error/Missing:** Could not resolve thumbnail for pet `{item_name}` (Tier: {tier}).\n"
                         f"Raw Directory Images Found: `{images}`", ephemeral=True
                     )
                     return
 
                 fake_username = "TestUser"
                 embed = await build_hatch_embed_from_data(session, latest_hatch, fake_username)
-                await interaction.followup.send(content=f"✅ Image loaded successfully! Resolved URL: `{resolved_url}`", embed=embed, ephemeral=False)
+                await interaction.followup.send(content=f"✅ Image loaded successfully! Resolved Thumbnail URL: `{resolved_url}`", embed=embed, ephemeral=False)
 
         except Exception as e:
             await interaction.followup.send(f"❌ Exception caught while loading image: ```python\n{str(e)}\n```", ephemeral=True)
