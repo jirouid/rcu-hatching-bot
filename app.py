@@ -160,7 +160,98 @@ def country_to_flag(country_code):
     code = country_code.upper()
     return chr(127397 + ord(code[0])) + chr(127397 + ord(code[1]))
 
-@tasks.loop(seconds=30)
+# Helper to build embed data from a hatch entry
+async def build_hatch_embed_from_data(session, hatch):
+    # Fetch Pet Directory for Rarity and Images
+    pets_directory = {}
+    try:
+        async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/directories/pets") as resp:
+            if resp.status == 200:
+                res_json = await resp.json()
+                # Handle structure where entries might be wrapped under 'entries' key or root dict
+                pets_directory = res_json.get("entries", res_json)
+    except Exception as e:
+        print(f"Error fetching pet directory: {e}")
+
+    user_id = hatch.get("userId")
+    clan_tag = hatch.get("clanTag", "")
+    clan_display = f"[{clan_tag}] " if clan_tag else ""
+    country_code = hatch.get("countryCode", "")
+    flag = country_to_flag(country_code)
+    
+    egg_name = hatch.get("eggName", "Unknown")
+    eggs_opened = hatch.get("eggsOpened", 0)
+    player_chance = hatch.get("playerChance", 0)
+    serial = hatch.get("serial", 0)
+    
+    item_info = hatch.get("item", {})
+    item_name = item_info.get("name", "Unknown Pet")
+    tier = item_info.get("tier", 1) # 1: normal, 2: golden, 3: toxic, 4: galaxy
+    is_shiny = item_info.get("shiny", False)
+
+    # Lookup pet info in directory
+    pet_data = pets_directory.get(item_name, {})
+    rarity = pet_data.get("rarity", "secret").lower()
+    images = pet_data.get("images", [])
+
+    image_url = None
+    img_index = tier - 1 if 0 <= (tier - 1) < len(images) else 0
+    if images:
+        image_url = format_asset_url(images[img_index])
+
+    tier_prefix = "Normal"
+    if tier == 2:
+        tier_prefix = "Golden"
+    elif tier == 3:
+        tier_prefix = "Toxic"
+    elif tier == 4:
+        tier_prefix = "Galaxy"
+    if is_shiny and tier == 1:
+        tier_prefix = "Secret"
+
+    embed_color = discord.Color.red()
+    if tier == 2:
+        embed_color = discord.Color.from_str("#ffd024")
+    elif tier == 3:
+        embed_color = discord.Color.from_str("#57ed4c")
+    elif tier == 4:
+        embed_color = discord.Color.from_str("#b811ff")
+    else:
+        if rarity == "secret":
+            embed_color = discord.Color.from_str("#fd4649")
+        elif rarity == "divine":
+            embed_color = discord.Color.from_str("#ffee00")
+        elif rarity == "supreme":
+            embed_color = discord.Color.from_str("#ff6600")
+        elif rarity == "mysterious":
+            embed_color = discord.Color.from_str("#9400fd")
+        elif rarity == "ultimate":
+            embed_color = discord.Color.from_str("#08ff00")
+
+    formatted_eggs_opened = f"{eggs_opened:,.0f}" if eggs_opened < 1000000 else f"{eggs_opened / 1000000:.2f}M" if eggs_opened < 1000000000 else f"{eggs_opened / 1000000000:.2f}B"
+    formatted_player_chance = f"1/{int(1/player_chance):,}" if player_chance > 0 else "N/A"
+
+    description_text = (
+        f"🔥 **Congrats! {flag}**\n"
+        f"**UserID {user_id} hatched a**\n"
+        f"**{tier_prefix} {item_name}!**\n\n"
+        f"🥚 **Egg:** {egg_name} (`{formatted_eggs_opened} opened`)\n"
+        f"🎲 **Rarity:** `{formatted_player_chance}`\n"
+        f"⭐ **Serial:** `#{serial}`\n\n"
+        f"📘 **Player's Stats:**\n"
+        f"Total Eggs Opened: {formatted_eggs_opened}\n"
+        f"Rarity: {formatted_player_chance}"
+    )
+
+    embed = discord.Embed(description=description_text, color=embed_color)
+    embed.set_author(name=f"{clan_display}UserID: {user_id}", icon_url=image_url if image_url else discord.Embed.Empty)
+    if image_url:
+        embed.set_thumbnail(url=image_url)
+    embed.timestamp = datetime.now()
+    return embed
+
+
+@tasks.loop(seconds=3)
 async def hatching_announcement_loop():
     if not hatching_channels:
         return
@@ -171,7 +262,8 @@ async def hatching_announcement_loop():
         try:
             async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/directories/pets") as resp:
                 if resp.status == 200:
-                    pets_directory = await resp.json()
+                    res_json = await resp.json()
+                    pets_directory = res_json.get("entries", res_json)
         except Exception as e:
             print(f"Error fetching pet directory: {e}")
             return
@@ -193,20 +285,17 @@ async def hatching_announcement_loop():
         # Process from oldest to newest
         for hatch in reversed(hatches):
             hatch_id = hatch.get("id")
-            if not hatch_id or hatch_id in processed_hatches:
+            if hatch_id is None or hatch_id in processed_hatches:
                 continue
 
-            # Mark as processed immediately
             processed_hatches.append(hatch_id)
             new_hatches_found = True
 
-            # Ignore anonymous hatches
             if hatch.get("anonymous", False):
                 continue
 
             user_id = hatch.get("userId")
             
-            # Check if this Roblox user ID is linked to ANY user in our bot
             matched_discord_id = None
             roblox_username = None
             for d_id, accounts in linked_accounts.items():
@@ -218,11 +307,9 @@ async def hatching_announcement_loop():
                 if matched_discord_id:
                     break
 
-            # If the user hatching the pet is not linked in our bot, skip
             if not matched_discord_id:
                 continue
 
-            # Extract Hatch Details
             clan_tag = hatch.get("clanTag", "")
             clan_display = f"[{clan_tag}] " if clan_tag else ""
             country_code = hatch.get("countryCode", "")
@@ -235,21 +322,18 @@ async def hatching_announcement_loop():
             
             item_info = hatch.get("item", {})
             item_name = item_info.get("name", "Unknown Pet")
-            tier = item_info.get("tier", 1) # 1: normal, 2: golden, 3: toxic, 4: galaxy
+            tier = item_info.get("tier", 1)
             is_shiny = item_info.get("shiny", False)
 
-            # Lookup pet info in directory
             pet_data = pets_directory.get(item_name, {})
             rarity = pet_data.get("rarity", "secret").lower()
             images = pet_data.get("images", [])
 
-            # Select correct image based on tier (index 0: normal, 1: golden, 2: toxic, 3: galaxy)
             image_url = None
             img_index = tier - 1 if 0 <= (tier - 1) < len(images) else 0
             if images:
                 image_url = format_asset_url(images[img_index])
 
-            # Determine Tier Prefix Name & Color mapping
             tier_prefix = "Normal"
             if tier == 2:
                 tier_prefix = "Golden"
@@ -260,7 +344,6 @@ async def hatching_announcement_loop():
             if is_shiny and tier == 1:
                 tier_prefix = "Secret"
 
-            # Color logic based on rarity and variant
             embed_color = discord.Color.red()
             if tier == 2:
                 embed_color = discord.Color.from_str("#ffd024")
@@ -280,11 +363,9 @@ async def hatching_announcement_loop():
                 elif rarity == "ultimate":
                     embed_color = discord.Color.from_str("#08ff00")
 
-            # Format numbers cleanly (e.g. 3.72M, 1.03B)
             formatted_eggs_opened = f"{eggs_opened:,.0f}" if eggs_opened < 1000000 else f"{eggs_opened / 1000000:.2f}M" if eggs_opened < 1000000000 else f"{eggs_opened / 1000000000:.2f}B"
             formatted_player_chance = f"1/{int(1/player_chance):,}" if player_chance > 0 else "N/A"
 
-            # Build Embed Matching Screenshot Layout
             description_text = (
                 f"🔥 **Congrats! {flag}**\n"
                 f"**{roblox_username} hatched a**\n"
@@ -303,7 +384,6 @@ async def hatching_announcement_loop():
                 embed.set_thumbnail(url=image_url)
             embed.timestamp = datetime.now()
 
-            # Send to all configured hatching channels across servers
             for guild_id_str, chan_id in hatching_channels.items():
                 guild = bot.get_guild(int(guild_id_str))
                 if not guild:
@@ -317,7 +397,6 @@ async def hatching_announcement_loop():
                 except Exception as e:
                     print(f"Failed to send hatch notification in guild {guild_id_str}: {e}")
 
-        # Keep only the last 200 processed hatch IDs in memory & DB to prevent bloat
         if new_hatches_found:
             if len(processed_hatches) > 200:
                 processed_hatches = processed_hatches[-200:]
@@ -339,7 +418,6 @@ async def activate_merchants(interaction: discord.Interaction, channel: discord.
     guild_id = str(interaction.guild.id)
     active_channels[guild_id] = channel.id
     save_setting("active_channels", active_channels)
-    
     await interaction.response.send_message(f"✅ Merchant notifications have been activated and set to {channel.mention}!", ephemeral=True)
 
 
@@ -350,7 +428,6 @@ async def activate_hatching(interaction: discord.Interaction, channel: discord.T
     guild_id = str(interaction.guild.id)
     hatching_channels[guild_id] = channel.id
     save_setting("hatching_channels", hatching_channels)
-    
     await interaction.response.send_message(f"✅ Hatching channel has been set to {channel.mention}!", ephemeral=True)
 
 
@@ -361,17 +438,13 @@ async def desactivate_merchants(interaction: discord.Interaction):
     if guild_id in active_channels:
         del active_channels[guild_id]
         save_setting("active_channels", active_channels)
-        
         await interaction.response.send_message("🛑 Merchant notifications have been deactivated.", ephemeral=True)
     else:
         await interaction.response.send_message("⚠️ Merchant notifications are not currently active in this server.", ephemeral=True)
 
 
 @bot.tree.command(name="link_role_to_merchant", description="Link a specific role to ping for a chosen merchant.")
-@app_commands.describe(
-    merchant_name="Select the merchant type",
-    role="The role to ping when this merchant appears"
-)
+@app_commands.describe(merchant_name="Select the merchant type", role="The role to ping when this merchant appears")
 @app_commands.choices(merchant_name=[
     app_commands.Choice(name="Honey & Dungeon Merchant", value="Honey & Dungeon Merchant"),
     app_commands.Choice(name="Ancient Merchant", value="Ancient Merchant"),
@@ -382,10 +455,8 @@ async def link_role_to_merchant(interaction: discord.Interaction, merchant_name:
     guild_id = str(interaction.guild.id)
     if guild_id not in merchant_roles:
         merchant_roles[guild_id] = {}
-    
     merchant_roles[guild_id][merchant_name] = role.id
     save_setting("merchant_roles", merchant_roles)
-    
     await interaction.response.send_message(f"🔗 Successfully linked **{merchant_name}** notifications to role {role.mention}!", ephemeral=True)
 
 
@@ -427,6 +498,33 @@ async def test_merchant(interaction: discord.Interaction, merchant_name: str):
     
     await channel.send(content=role_mention, embed=embed)
     await interaction.response.send_message(f"✅ Test alert for **{merchant_name}** successfully sent to {channel.mention}!", ephemeral=True)
+
+
+@bot.tree.command(name="show_global_hatch", description="Test command: Pulls and displays the absolute latest global hatch right now.")
+@app_commands.default_permissions(manage_channels=True)
+async def show_global_hatch(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/pet-hatches") as resp:
+                if resp.status != 200:
+                    await interaction.followup.send(f"❌ Failed to reach API (Status code: {resp.status})", ephemeral=True)
+                    return
+                data = await resp.json()
+                hatches = data.get("petHatches", [])
+                
+                if not hatches:
+                    await interaction.followup.send("⚠️ API returned zero pet hatches.", ephemeral=True)
+                    return
+                
+                # Get the very first item (latest hatch)
+                latest_hatch = hatches[0]
+                embed = await build_hatch_embed_from_data(session, latest_hatch)
+                
+                await interaction.followup.send("🧪 **Here is the latest raw global hatch from the API:**", embed=embed, ephemeral=False)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error fetching from API: {e}", ephemeral=True)
 
 
 @bot.tree.command(name="bot_info", description="Displays bot configurations and linked accounts for this server.")
