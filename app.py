@@ -6,11 +6,14 @@ from flask import Flask
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
+from datetime import datetime, timedelta
+import pytz
 from dotenv import load_dotenv
 
 # Load local environment variables
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
+TUNISIA_TZ = pytz.timezone('Africa/Tunis')
 
 # ==========================================
 # 0. PERSISTENT STORAGE FUNCTIONS (JSON)
@@ -79,9 +82,14 @@ async def on_ready():
 # ==========================================
 # 3. MERCHANT BACKGROUND TASK & TIMING
 # ==========================================
-@tasks.loop(minutes=30)
+@tasks.loop(minutes=1)
 async def merchant_announcement_loop():
-    # Note: JSON keys become strings, so we convert guild.id to string for lookup
+    now = datetime.now(TUNISIA_TZ)
+    if now.minute != 0:
+        return
+    current_hour = now.hour
+    unix_timestamp = int((datetime.now() + timedelta(minutes=15)).timestamp())
+
     for guild_id_str, channel_id in active_channels.items():
         guild = bot.get_guild(int(guild_id_str))
         if not guild:
@@ -91,21 +99,45 @@ async def merchant_announcement_loop():
             continue
 
         guild_roles = merchant_roles.get(guild_id_str, {})
-        honey_role_id = guild_roles.get("Honey & Dungeon Merchant")
-        honey_mention = f"<@&{honey_role_id}>" if honey_role_id else "@here"
 
-        embed = discord.Embed(
-            title="🍯 Honey & Dungeon Merchant Has Appeared!",
-            description="The merchant has spawned in-game! Grab your items before they leave.",
-            color=discord.Color.gold()
-        )
-        embed.add_field(name="Available Merchant", value="Honey & Dungeon Merchant", inline=False)
-        embed.set_footer(text="Check the game now!")
+        if current_hour % 3 == 0:
+            merchant_type = "Ancient Merchant"
+            role_id = guild_roles.get(merchant_type)
+            role_mention = f"<@&{role_id}>" if role_id else "@here"
+            
+            embed = discord.Embed(title="🛒 Merchant Alert!", description="🎟️ **Ancient Ticket Merchant** has arrived!", color=discord.Color.gold())
+            embed.add_field(name="Status", value=f"Leaves <t:{unix_timestamp}:R>", inline=False)
+            
+            try:
+                await channel.send(content=role_mention, embed=embed)
+            except Exception as e:
+                print(f"Failed to send merchant notification in guild {guild_id_str}: {e}")
 
-        try:
-            await channel.send(content=honey_mention, embed=embed)
-        except Exception as e:
-            print(f"Failed to send merchant notification in guild {guild_id_str}: {e}")
+        elif (current_hour - 1) % 3 == 0:
+            merchant_type = "Honey & Dungeon Merchant"
+            role_id = guild_roles.get(merchant_type)
+            role_mention = f"<@&{role_id}>" if role_id else "@here"
+            
+            embed = discord.Embed(title="🛒 Merchant Alert!", description="🍯 **Honey & Dungeon Merchant** has arrived!", color=discord.Color.orange())
+            embed.add_field(name="Status", value=f"Leaves <t:{unix_timestamp}:R>", inline=False)
+            
+            try:
+                await channel.send(content=role_mention, embed=embed)
+            except Exception as e:
+                print(f"Failed to send merchant notification in guild {guild_id_str}: {e}")
+
+        elif (current_hour - 2) % 3 == 0:
+            merchant_type = "Paradox Merchant"
+            role_id = guild_roles.get(merchant_type)
+            role_mention = f"<@&{role_id}>" if role_id else "@here"
+            
+            embed = discord.Embed(title="🛒 Merchant Alert!", description="⏰ **Paradox Merchant** has arrived!", color=discord.Color.blue())
+            embed.add_field(name="Status", value=f"Leaves <t:{unix_timestamp}:R>", inline=False)
+            
+            try:
+                await channel.send(content=role_mention, embed=embed)
+            except Exception as e:
+                print(f"Failed to send merchant notification in guild {guild_id_str}: {e}")
 
 @merchant_announcement_loop.before_loop
 async def before_merchant_loop():
