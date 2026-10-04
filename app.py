@@ -92,7 +92,6 @@ async def get_pets_directory(session):
     global pets_directory_cache, last_directory_fetch
     current_time = time.time()
     
-    # Use cache if it's less than 30 minutes old
     if pets_directory_cache and (current_time - last_directory_fetch) < 1800:
         return pets_directory_cache
 
@@ -197,27 +196,11 @@ def country_to_flag(country_code):
     code = country_code.upper()
     return chr(127397 + ord(code[0])) + chr(127397 + ord(code[1]))
 
-async def fetch_roblox_avatar(session, user_id):
-    if not user_id:
-        return None
-    try:
-        url = f"https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds={user_id}&size=150x150&format=Png&isCircular=false"
-        async with session.get(url) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                data_list = data.get("data", [])
-                if data_list:
-                    return data_list[0].get("imageUrl")
-    except Exception as e:
-        print(f"Error fetching Roblox avatar for user {user_id}: {e}")
-    return None
-
 # Helper to build Components V2 payload for a hatch entry
 async def build_hatch_v2_payload(session, hatch, display_name, matched_discord_id):
     pets_directory = await get_pets_directory(session)
 
     clan_tag = hatch.get("clanTag", "")
-    clan_display = f"[{clan_tag}] " if clan_tag else ""
     country_code = hatch.get("countryCode", "")
     flag = country_to_flag(country_code)
     
@@ -227,14 +210,12 @@ async def build_hatch_v2_payload(session, hatch, display_name, matched_discord_i
     chance = hatch.get("chance", 0)
     player_chance = hatch.get("playerChance", 0)
     serial = hatch.get("serial", 0)
-    user_id = hatch.get("userId")
     
     item_info = hatch.get("item", {})
     item_name = item_info.get("name", "Unknown Pet")
     tier = item_info.get("tier", 1) # 1: normal, 2: golden, 3: toxic, 4: galaxy
     is_shiny = item_info.get("shiny", False)
 
-    # Safely extract pet info from directory supporting list or dict structures
     pet_data = {}
     if isinstance(pets_directory, dict):
         pet_data = pets_directory.get(item_name, {})
@@ -260,7 +241,6 @@ async def build_hatch_v2_payload(session, hatch, display_name, matched_discord_i
         if asset_id:
             image_url = await fetch_roblox_thumbnail(session, asset_id)
 
-    # Proper naming prefix matching your preferred format
     prefix_parts = []
     if is_shiny:
         prefix_parts.append("Shiny")
@@ -304,7 +284,6 @@ async def build_hatch_v2_payload(session, hatch, display_name, matched_discord_i
     formatted_chance = f"1/{int(100 / chance):,}" if chance > 0 else "N/A"
     formatted_player_chance = f"1/{int(100 / player_chance):,}" if player_chance > 0 else "N/A"
 
-    # Components V2 Structure Payload
     payload = {
         "content": f"> Congrats <@{matched_discord_id}> ! 🎉",
         "flags": 32768,  # Enables Components V2 mode
@@ -411,7 +390,6 @@ async def hatching_announcement_loop():
                     continue
                 
                 try:
-                    # Send raw V2 payload directly via discord.py HTTP client to bypass standard schema restrictions
                     await channel._state.http.request(
                         discord.http.Route('POST', '/channels/{channel_id}/messages', channel_id=channel.id),
                         json=v2_payload
@@ -533,6 +511,67 @@ async def test_merchant(interaction: discord.Interaction, merchant_name: str):
     await channel.send(content=role_mention, embed=embed)
     await interaction.response.send_message(f"✅ Test alert for **{merchant_name}** successfully sent to {channel.mention}!", ephemeral=True)
 
+
+@bot.tree.command(name="test_hatching_message", description="Force-posts the latest global hatch into the configured hatching channel.")
+@app_commands.default_permissions(manage_channels=True)
+async def test_hatching_message(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    guild_id_str = str(interaction.guild.id)
+    
+    channel_id = hatching_channels.get(guild_id_str)
+    if not channel_id:
+        await interaction.followup.send("⚠️ No hatching channel is activated here! Use `/activate_hatching` first.", ephemeral=True)
+        return
+        
+    channel = interaction.guild.get_channel(channel_id)
+    if not channel:
+        await interaction.followup.send("⚠️ The configured hatching channel could not be found.", ephemeral=True)
+        return
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get("https://public-api.powerfulstudio.xyz/rcu/v1/pet-hatches") as resp:
+                if resp.status != 200:
+                    await interaction.followup.send("⚠️ Failed to fetch pet hatches from the public API.", ephemeral=True)
+                    return
+                data = await resp.json()
+                hatches = data.get("petHatches", [])
+        except Exception as e:
+            await interaction.followup.send(f"⚠️ Error fetching pet hatches: {e}", ephemeral=True)
+            return
+
+        if not hatches:
+            await interaction.followup.send("⚠️ No recent hatches found from the public API.", ephemeral=True)
+            return
+
+        # Grab the latest hatch from the list
+        latest_hatch = hatches[0]
+        
+        # Use tester's Discord info as default fallback so it displays cleanly during testing
+        matched_discord_id = str(interaction.user.id)
+        display_name = interaction.user.name
+
+        # Check if the hatch owner is linked in the bot database
+        user_id = latest_hatch.get("userId")
+        for d_id, accounts in linked_accounts.items():
+            for acc in accounts:
+                if acc["id"] == user_id:
+                    matched_discord_id = d_id
+                    display_name = acc["username"]
+                    break
+            if matched_discord_id != str(interaction.user.id):
+                break
+
+        v2_payload = await build_hatch_v2_payload(session, latest_hatch, display_name, matched_discord_id)
+
+        try:
+            await channel._state.http.request(
+                discord.http.Route('POST', '/channels/{channel_id}/messages', channel_id=channel.id),
+                json=v2_payload
+            )
+            await interaction.followup.send(f"✅ Successfully forced the latest hatch test message into {channel.mention}!", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Failed to send test hatch message: `{e}`", ephemeral=True)
 
 
 @bot.tree.command(name="bot_info", description="Displays bot configurations and linked accounts for this server.")
