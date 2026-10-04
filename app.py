@@ -212,8 +212,8 @@ async def fetch_roblox_avatar(session, user_id):
         print(f"Error fetching Roblox avatar for user {user_id}: {e}")
     return None
 
-# Helper to build embed data from a hatch entry
-async def build_hatch_embed_from_data(session, hatch, display_name):
+# Helper to build Components V2 payload for a hatch entry
+async def build_hatch_v2_payload(session, hatch, display_name, matched_discord_id):
     pets_directory = await get_pets_directory(session)
 
     clan_tag = hatch.get("clanTag", "")
@@ -260,8 +260,6 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
         if asset_id:
             image_url = await fetch_roblox_thumbnail(session, asset_id)
 
-    avatar_url = await fetch_roblox_avatar(session, user_id)
-
     # Proper naming prefix matching your preferred format
     prefix_parts = []
     if is_shiny:
@@ -306,39 +304,54 @@ async def build_hatch_embed_from_data(session, hatch, display_name):
     formatted_chance = f"1/{int(100 / chance):,}" if chance > 0 else "N/A"
     formatted_player_chance = f"1/{int(100 / player_chance):,}" if player_chance > 0 else "N/A"
 
-    embed = discord.Embed(color=embed_color, timestamp=datetime.now())
-    embed.set_author(name=f"{clan_display}{display_name}", icon_url=avatar_url if avatar_url else discord.Embed.Empty)
-    
+    # Components V2 Structure Payload
+    payload = {
+        "content": f"> Congrats <@{matched_discord_id}> ! 🎉",
+        "flags": 32768,  # Enables Components V2 mode
+        "components": [
+            {
+                "type": 17,  # Container component
+                "accent_color": embed_color.value,
+                "components": [
+                    {
+                        "type": 10,  # Text Display header
+                        "content": f"### 🔥 Congrats! {flag} {display_name} hatched a {tier_prefix} {item_name}!{shiny_suffix}"
+                    },
+                    {
+                        "type": 14,  # Separator
+                        "spacing": 1,
+                        "divider": True
+                    },
+                    {
+                        "type": 10,  # Main hatch details
+                        "content": (
+                            f"🥚 **Egg:** {egg_name} (`{formatted_eggs_opened} opened`)\n"
+                            f"🎲 **Rarity:** `{formatted_chance}`\n"
+                            f"⭐ **Serial:** `#{serial}`"
+                        )
+                    },
+                    {
+                        "type": 14,  # Separator
+                        "spacing": 1,
+                        "divider": True
+                    },
+                    {
+                        "type": 10,  # Player stats
+                        "content": (
+                            f"**📘 Player's Stats:**\n"
+                            f"Total Eggs Opened: {formatted_eggs_opened}\n"
+                            f"Rarity: `{formatted_player_chance}`"
+                        )
+                    }
+                ]
+            }
+        ]
+    }
+
     if image_url:
-        embed.set_thumbnail(url=image_url)
+        payload["components"][0]["thumbnail"] = {"url": image_url}
 
-    # Restored organized layout with clean fields and proper spacing
-    embed.add_field(
-        name="", 
-        value=f"**🔥 Congrats! {flag} {display_name} hatched a {tier_prefix} {item_name}!{shiny_suffix}**", 
-        inline=False
-    )
-    
-    embed.add_field(
-        name="", 
-        value=(
-            f"🥚 **Egg:** {egg_name} (`{formatted_eggs_opened} opened`)\n"
-            f"🎲 **Rarity:** `{formatted_chance}`\n"
-            f"⭐ **Serial:** `#{serial}`\n"
-        ), 
-        inline=False
-    )
-    
-    embed.add_field(
-        name="\n **📘 Player's Stats:**", 
-        value=(
-            f"Total Eggs Opened: {formatted_eggs_opened}\n"
-            f"Rarity: `{formatted_player_chance}`"
-        ), 
-        inline=False
-    )
-
-    return embed
+    return payload
 
 
 @tasks.loop(seconds=3)
@@ -387,7 +400,7 @@ async def hatching_announcement_loop():
             if not matched_discord_id:
                 continue
 
-            embed = await build_hatch_embed_from_data(session, hatch, roblox_username)
+            v2_payload = await build_hatch_v2_payload(session, hatch, roblox_username, matched_discord_id)
 
             for guild_id_str, chan_id in hatching_channels.items():
                 guild = bot.get_guild(int(guild_id_str))
@@ -398,8 +411,11 @@ async def hatching_announcement_loop():
                     continue
                 
                 try:
-                    message_content = f"> Congrats <@{matched_discord_id}> ! 🎉"
-                    await channel.send(content=message_content, embed=embed)
+                    # Send raw V2 payload directly via discord.py HTTP client to bypass standard schema restrictions
+                    await channel._state.http.request(
+                        discord.http.Route('POST', '/channels/{channel_id}/messages', channel_id=channel.id),
+                        json=v2_payload
+                    )
                 except Exception as e:
                     print(f"Failed to send hatch notification in guild {guild_id_str}: {e}")
 
