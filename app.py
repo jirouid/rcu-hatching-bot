@@ -285,7 +285,6 @@ async def build_hatch_v2_payload(session, hatch, display_name, matched_discord_i
     formatted_player_chance = f"1/{int(100 / player_chance):,}" if player_chance > 0 else "N/A"
 
     payload = {
-        "content": f"> Congrats <@{matched_discord_id}> ! 🎉",
         "flags": 32768,  # Enables Components V2 mode
         "components": [
             {
@@ -293,8 +292,8 @@ async def build_hatch_v2_payload(session, hatch, display_name, matched_discord_i
                 "accent_color": embed_color.value,
                 "components": [
                     {
-                        "type": 10,  # Text Display header
-                        "content": f"### 🔥 Congrats! {flag} {display_name} hatched a {tier_prefix} {item_name}!{shiny_suffix}"
+                        "type": 10,  # Text Display header (with mention included)
+                        "content": f"<@{matched_discord_id}>\n### 🔥 Congrats! {flag} {display_name} hatched a {tier_prefix} {item_name}!{shiny_suffix}"
                     },
                     {
                         "type": 14,  # Separator
